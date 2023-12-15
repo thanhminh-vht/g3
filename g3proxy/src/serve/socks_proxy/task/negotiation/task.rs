@@ -144,12 +144,8 @@ impl SocksProxyNegotiationTask {
 
         let req = v4a::SocksV4aRequest::recv(&mut clt_r).await?;
 
-        let task_notes = ServerTaskNotes::new(
-            self.ctx.worker_id,
-            self.ctx.cc_info.clone(),
-            None,
-            self.time_accepted.elapsed(),
-        );
+        let task_notes =
+            ServerTaskNotes::new(self.ctx.cc_info.clone(), None, self.time_accepted.elapsed());
         match req.command {
             SocksCommand::TcpConnect => {
                 let task = SocksProxyTcpConnectTask::new(
@@ -214,7 +210,7 @@ impl SocksProxyNegotiationTask {
                             user,
                             user_type,
                             self.ctx.server_config.name(),
-                            self.ctx.server_stats.extra_tags(),
+                            self.ctx.server_stats.share_extra_tags(),
                         );
                         user_ctx.req_stats().conn_total.add_socks();
                         Some(user_ctx)
@@ -234,7 +230,7 @@ impl SocksProxyNegotiationTask {
                             user,
                             user_type,
                             self.ctx.server_config.name(),
-                            self.ctx.server_stats.extra_tags(),
+                            self.ctx.server_stats.share_extra_tags(),
                         );
                         match user_ctx.check_password(password.as_original()) {
                             Ok(_) => {
@@ -275,7 +271,6 @@ impl SocksProxyNegotiationTask {
 
         let path_selection = self.get_egress_path_selection(user_ctx.as_ref());
         let task_notes = ServerTaskNotes::with_path_selection(
-            self.ctx.worker_id,
             self.ctx.cc_info.clone(),
             user_ctx,
             self.time_accepted.elapsed(),

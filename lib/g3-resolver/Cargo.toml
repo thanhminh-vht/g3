@@ -3,6 +3,7 @@ name = "g3-resolver"
 version = "0.5.0"
 license.workspace = true
 edition.workspace = true
+rust-version = "1.74.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -14,9 +15,9 @@ tokio-util = { workspace = true, features = ["time"]}
 log.workspace = true
 indexmap.workspace = true
 ahash.workspace = true
-c-ares = { version = "8.0", optional = true, default-features = false, features = ["build-cmake"] }
-c-ares-resolver = { version = "8.0", default-features = false, optional = true }
-hickory-resolver = { workspace = true, optional = true, features = ["tokio-runtime", "dns-over-rustls", "dns-over-https-rustls", "dns-over-quic", "dns-over-h3", "native-certs"] }
+c-ares = { workspace = true, optional = true, features = ["build-cmake"] }
+c-ares-resolver = { workspace = true, optional = true }
+hickory-resolver = { workspace = true, optional = true, features = ["tokio-runtime", "dns-over-rustls", "dns-over-https-rustls", "native-certs"] }
 hickory-proto = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
 g3-types = { workspace = true, optional = true }
@@ -26,3 +27,4 @@ default = []
 c-ares = ["dep:c-ares", "dep:c-ares-resolver"]
 vendored-c-ares = ["c-ares", "c-ares-resolver/vendored", "c-ares/vendored"]
 hickory = ["dep:hickory-resolver", "dep:hickory-proto", "g3-types/rustls", "dep:rustls"]
+quic = ["g3-types/quic", "hickory-resolver?/dns-over-quic", "hickory-resolver?/dns-over-h3"]

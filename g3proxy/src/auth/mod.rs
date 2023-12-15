@@ -86,10 +86,6 @@ impl Drop for UserGroup {
 }
 
 impl UserGroup {
-    pub(crate) fn name(&self) -> &MetricsName {
-        self.config.name()
-    }
-
     fn new_without_users(config: UserGroupConfig) -> Self {
         UserGroup {
             config: Arc::new(config),
@@ -229,7 +225,7 @@ impl UserGroup {
         self.foreach_dynamic_user(&mut f);
     }
 
-    pub(crate) fn foreach_static_user<F>(&self, f: &mut F)
+    pub(crate) fn foreach_static_user<F>(&self, mut f: F)
     where
         F: FnMut(&str, &Arc<User>),
     {
@@ -238,7 +234,7 @@ impl UserGroup {
         }
     }
 
-    pub(crate) fn foreach_dynamic_user<F>(&self, f: &mut F)
+    pub(crate) fn foreach_dynamic_user<F>(&self, mut f: F)
     where
         F: FnMut(&str, &Arc<User>),
     {

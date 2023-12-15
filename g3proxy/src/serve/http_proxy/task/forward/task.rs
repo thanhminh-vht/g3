@@ -451,7 +451,7 @@ impl<'a> HttpProxyForwardTask<'a> {
             let limit_config = if let Some(user_ctx) = self.task_notes.user_ctx() {
                 let user_io_stats = user_ctx.fetch_traffic_stats(
                     self.ctx.server_config.name(),
-                    self.ctx.server_stats.extra_tags(),
+                    self.ctx.server_stats.share_extra_tags(),
                 );
                 for s in &user_io_stats {
                     s.io.https_forward.add_in_bytes(origin_header_size);
@@ -483,7 +483,7 @@ impl<'a> HttpProxyForwardTask<'a> {
             let limit_config = if let Some(user_ctx) = self.task_notes.user_ctx() {
                 let user_io_stats = user_ctx.fetch_traffic_stats(
                     self.ctx.server_config.name(),
-                    self.ctx.server_stats.extra_tags(),
+                    self.ctx.server_stats.share_extra_tags(),
                 );
                 for s in &user_io_stats {
                     s.io.http_forward.add_in_bytes(origin_header_size);
@@ -591,7 +591,7 @@ impl<'a> HttpProxyForwardTask<'a> {
         // set client side socket options
         self.ctx
             .cc_info
-            .sock_set_raw_opts(&tcp_client_misc_opts, true)
+            .tcp_sock_set_raw_opts(&tcp_client_misc_opts, true)
             .map_err(|_| {
                 ServerTaskError::InternalServerError("failed to set client socket options")
             })?;

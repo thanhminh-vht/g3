@@ -74,6 +74,10 @@ fn main() {
             if version >= 0x1_14_00 {
                 println!("cargo:rustc-cfg=cares1_20");
             }
+
+            if version >= 0x1_16_00 {
+                println!("cargo:rustc-cfg=cares1_22");
+            }
         }
     }
 
@@ -83,5 +87,9 @@ fn main() {
 
     if env::var("CARGO_FEATURE_GEOIP").is_ok() {
         println!("cargo:rustc-env=G3_GEOIP_FEATURE=geoip");
+    }
+
+    if env::var("CARGO_FEATURE_QUIC").is_ok() {
+        println!("cargo:rustc-env=G3_QUIC_FEATURE=quinn");
     }
 }

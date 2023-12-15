@@ -34,8 +34,8 @@ mod dns;
 mod proxy;
 
 pub use base::{
-    as_domain, as_host, as_ipaddr, as_ipv4addr, as_ipv6addr, as_sockaddr, as_upstream_addr, as_url,
-    as_weighted_sockaddr, as_weighted_upstream_addr,
+    as_domain, as_env_sockaddr, as_host, as_ipaddr, as_ipv4addr, as_ipv6addr, as_sockaddr,
+    as_upstream_addr, as_url, as_weighted_sockaddr, as_weighted_upstream_addr,
 };
 pub use buf::as_socket_buffer_config;
 pub use haproxy::as_proxy_protocol_version;
@@ -44,7 +44,7 @@ pub use tcp::{
     as_happy_eyeballs_config, as_tcp_connect_config, as_tcp_keepalive_config, as_tcp_listen_config,
     as_tcp_misc_sock_opts,
 };
-pub use udp::as_udp_misc_sock_opts;
+pub use udp::{as_udp_listen_config, as_udp_misc_sock_opts};
 
 #[cfg(feature = "acl-rule")]
 pub use base::as_ip_network;

@@ -74,8 +74,7 @@ pub async fn load_all() -> anyhow::Result<()> {
     for name in &registry::get_names() {
         if !new_names.contains(name) {
             debug!("deleting escaper {name}");
-            registry::del(name);
-            crate::serve::update_dependency_to_escaper(name, "deleted").await;
+            delete_existed_unlocked(name).await;
             debug!("escaper {name} deleted");
         }
     }
@@ -129,7 +128,6 @@ pub(crate) async fn reload(
     debug!("reloading escaper {name} from position {position}");
     reload_unlocked(old_config, config).await?;
     debug!("escaper {name} reload OK");
-    update_dependency_to_escaper_unlocked(name).await;
     Ok(())
 }
 
@@ -158,7 +156,7 @@ pub(crate) async fn update_dependency_to_resolver(resolver: &MetricsName, status
 }
 
 #[async_recursion]
-async fn update_dependency_to_escaper_unlocked(target: &MetricsName) {
+async fn update_dependency_to_escaper_unlocked(target: &MetricsName, status: &str) {
     let mut names = Vec::<MetricsName>::new();
 
     registry::foreach(|name, escaper| {
@@ -169,7 +167,9 @@ async fn update_dependency_to_escaper_unlocked(target: &MetricsName) {
         }
     });
 
-    debug!("escaper {target} changed, will reload escaper(s) {names:?} which depend on it");
+    debug!(
+        "escaper {target} changed({status}), will reload escaper(s) {names:?} which depend on it"
+    );
     for name in names.iter() {
         debug!("escaper {name}: will reload as it depends on escaper {target}");
         if let Err(e) = reload_existed_unlocked(name, None).await {
@@ -179,7 +179,7 @@ async fn update_dependency_to_escaper_unlocked(target: &MetricsName) {
 
     // finish those in the same level first, then go in depth
     for name in names.iter() {
-        update_dependency_to_escaper_unlocked(name).await;
+        update_dependency_to_escaper_unlocked(name, "reloaded").await;
     }
 }
 
@@ -205,37 +205,51 @@ async fn reload_unlocked(old: AnyEscaperConfig, new: AnyEscaperConfig) -> anyhow
     }
 }
 
+async fn delete_existed_unlocked(name: &MetricsName) {
+    const STATUS: &str = "deleted";
+
+    registry::del(name);
+    update_dependency_to_escaper_unlocked(name, STATUS).await;
+    crate::serve::update_dependency_to_escaper(name, STATUS).await;
+}
+
 async fn reload_existed_unlocked(
     name: &MetricsName,
     new: Option<AnyEscaperConfig>,
 ) -> anyhow::Result<()> {
+    const STATUS: &str = "reloaded";
+
     registry::reload_existed(name, new).await?;
-    crate::serve::update_dependency_to_escaper(name, "reloaded").await;
+    update_dependency_to_escaper_unlocked(name, STATUS).await;
+    crate::serve::update_dependency_to_escaper(name, STATUS).await;
     Ok(())
 }
 
 async fn spawn_new_unlocked(config: AnyEscaperConfig) -> anyhow::Result<()> {
+    const STATUS: &str = "spawned";
+
     let name = config.name().clone();
     let escaper = match config {
-        AnyEscaperConfig::DirectFixed(_) => DirectFixedEscaper::prepare_initial(config)?,
-        AnyEscaperConfig::DirectFloat(_) => DirectFloatEscaper::prepare_initial(config).await?,
-        AnyEscaperConfig::DummyDeny(_) => DummyDenyEscaper::prepare_initial(config)?,
-        AnyEscaperConfig::ProxyFloat(_) => ProxyFloatEscaper::prepare_initial(config).await?,
-        AnyEscaperConfig::ProxyHttp(_) => ProxyHttpEscaper::prepare_initial(config)?,
-        AnyEscaperConfig::ProxyHttps(_) => ProxyHttpsEscaper::prepare_initial(config)?,
-        AnyEscaperConfig::ProxySocks5(_) => ProxySocks5Escaper::prepare_initial(config)?,
-        AnyEscaperConfig::RouteFailover(_) => RouteFailoverEscaper::prepare_initial(config)?,
-        AnyEscaperConfig::RouteResolved(_) => RouteResolvedEscaper::prepare_initial(config)?,
+        AnyEscaperConfig::DirectFixed(c) => DirectFixedEscaper::prepare_initial(*c)?,
+        AnyEscaperConfig::DirectFloat(c) => DirectFloatEscaper::prepare_initial(*c).await?,
+        AnyEscaperConfig::DummyDeny(c) => DummyDenyEscaper::prepare_initial(c)?,
+        AnyEscaperConfig::ProxyFloat(c) => ProxyFloatEscaper::prepare_initial(c).await?,
+        AnyEscaperConfig::ProxyHttp(c) => ProxyHttpEscaper::prepare_initial(*c)?,
+        AnyEscaperConfig::ProxyHttps(c) => ProxyHttpsEscaper::prepare_initial(*c)?,
+        AnyEscaperConfig::ProxySocks5(c) => ProxySocks5Escaper::prepare_initial(c)?,
+        AnyEscaperConfig::RouteFailover(c) => RouteFailoverEscaper::prepare_initial(c)?,
+        AnyEscaperConfig::RouteResolved(c) => RouteResolvedEscaper::prepare_initial(c)?,
         #[cfg(feature = "geoip")]
-        AnyEscaperConfig::RouteGeoIp(_) => RouteGeoIpEscaper::prepare_initial(config)?,
-        AnyEscaperConfig::RouteMapping(_) => RouteMappingEscaper::prepare_initial(config)?,
-        AnyEscaperConfig::RouteQuery(_) => RouteQueryEscaper::prepare_initial(config).await?,
-        AnyEscaperConfig::RouteSelect(_) => RouteSelectEscaper::prepare_initial(config)?,
-        AnyEscaperConfig::RouteUpstream(_) => RouteUpstreamEscaper::prepare_initial(config)?,
-        AnyEscaperConfig::RouteClient(_) => RouteClientEscaper::prepare_initial(config)?,
-        AnyEscaperConfig::TrickFloat(_) => TrickFloatEscaper::prepare_initial(config)?,
+        AnyEscaperConfig::RouteGeoIp(c) => RouteGeoIpEscaper::prepare_initial(c)?,
+        AnyEscaperConfig::RouteMapping(c) => RouteMappingEscaper::prepare_initial(c)?,
+        AnyEscaperConfig::RouteQuery(c) => RouteQueryEscaper::prepare_initial(c).await?,
+        AnyEscaperConfig::RouteSelect(c) => RouteSelectEscaper::prepare_initial(c)?,
+        AnyEscaperConfig::RouteUpstream(c) => RouteUpstreamEscaper::prepare_initial(c)?,
+        AnyEscaperConfig::RouteClient(c) => RouteClientEscaper::prepare_initial(c)?,
+        AnyEscaperConfig::TrickFloat(c) => TrickFloatEscaper::prepare_initial(c)?,
     };
     registry::add(name.clone(), escaper);
-    crate::serve::update_dependency_to_escaper(&name, "spawned").await;
+    update_dependency_to_escaper_unlocked(&name, STATUS).await;
+    crate::serve::update_dependency_to_escaper(&name, STATUS).await;
     Ok(())
 }

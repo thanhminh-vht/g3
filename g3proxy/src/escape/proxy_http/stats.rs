@@ -71,7 +71,11 @@ impl EscaperStats for ProxyHttpEscaperStats {
         self.id
     }
 
-    fn extra_tags(&self) -> &Arc<ArcSwapOption<StaticMetricsTags>> {
+    fn load_extra_tags(&self) -> Option<Arc<StaticMetricsTags>> {
+        self.extra_metrics_tags.load_full()
+    }
+
+    fn share_extra_tags(&self) -> &Arc<ArcSwapOption<StaticMetricsTags>> {
         &self.extra_metrics_tags
     }
 

@@ -51,6 +51,11 @@ The code should comply to these, but should be more compliant to existing popula
  - [Forward-Protocol-Specification-v1](https://github.com/fluent/fluentd/wiki/Forward-Protocol-Specification-v1)
     : Forward Protocol Specification v1
 
+## StatsD
+
+ - [the-dogstatsd-protocol](https://docs.datadoghq.com/developers/dogstatsd/datagram_shell?tab=metrics#the-dogstatsd-protocol)
+    : The DogStatsD protocol
+
 ## PEN
 
  - [PRIVATE ENTERPRISE NUMBERS](https://www.iana.org/assignments/enterprise-numbers/enterprise-numbers)
@@ -160,7 +165,8 @@ The code should comply to these, but should be more compliant to existing popula
 
  - [rfc8446](https://datatracker.ietf.org/doc/html/rfc8446)
     : The Transport Layer Security (TLS) Protocol Version 1.3
-
+ - [rfc8998](https://datatracker.ietf.org/doc/html/rfc8998)
+    : ShangMi (SM) Cipher Suites for TLS 1.3
  - [GB/T 38636-2020](https://openstd.samr.gov.cn/bzgk/gb/newGbInfo?hcno=778097598DA2761E94A5FF3F77BD66DA)
     : Information security technology—Transport layer cryptography protocol(TLCP)
 
@@ -322,6 +328,8 @@ The code should comply to these, but should be more compliant to existing popula
     : Internet Content Adaptation Protocol (ICAP)
  - [draft-icap-ext-partial-content-07](http://www.icap-forum.org/documents/specification/draft-icap-ext-partial-content-07.txt)
     : ICAP Partial Content Extension
+ - [draft-stecher-icap-subid-00](https://www.icap-forum.org/documents/specification/draft-stecher-icap-subid-00.txt)
+    : ICAP Extensions
 
 ## WCCP
 

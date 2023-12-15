@@ -14,15 +14,21 @@
  * limitations under the License.
  */
 
-use std::io;
+use std::sync::Arc;
 
-use cadence::MetricError;
-use thiserror::Error;
+use anyhow::anyhow;
+use clap::{ArgMatches, Command};
 
-#[derive(Debug, Error)]
-pub enum StatsdClientBuildError {
-    #[error("socket setup failed: {0}")]
-    SocketError(io::Error),
-    #[error("sink setup failed: {0}")]
-    SinkError(MetricError),
+use crate::ProcArgs;
+
+pub const COMMAND: &str = "h3";
+
+pub fn command() -> Command {
+    Command::new(COMMAND).hide(true)
+}
+
+pub async fn run(_proc_args: &Arc<ProcArgs>, _cmd_args: &ArgMatches) -> anyhow::Result<()> {
+    Err(anyhow!(
+        "h3 support is not compiled in, 'quic' feature is needed to enable this"
+    ))
 }

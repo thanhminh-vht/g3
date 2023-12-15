@@ -19,7 +19,7 @@ pub mod control;
 pub mod daemonize;
 pub mod listen;
 pub mod log;
-pub mod metric;
+pub mod metrics;
 pub mod opts;
 pub mod runtime;
 pub mod server;

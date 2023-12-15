@@ -21,7 +21,7 @@ use std::str::FromStr;
 use anyhow::{anyhow, Context};
 use yaml_rust::Yaml;
 
-use g3_statsd::client::{StatsdBackend, StatsdClientConfig};
+use g3_statsd_client::{StatsdBackend, StatsdClientConfig};
 use g3_types::metrics::MetricsName;
 
 fn as_statsd_backend_udp(v: &Yaml) -> anyhow::Result<StatsdBackend> {
@@ -32,10 +32,9 @@ fn as_statsd_backend_udp(v: &Yaml) -> anyhow::Result<StatsdBackend> {
 
             crate::foreach_kv(map, |k, v| match crate::key::normalize(k).as_str() {
                 "address" | "addr" => {
-                    addr = Some(
-                        crate::value::as_sockaddr(v)
-                            .context(format!("invalid value for key {k}"))?,
-                    );
+                    addr = Some(crate::value::as_env_sockaddr(v).context(format!(
+                        "invalid statsd udp peer socket address value for key {k}"
+                    ))?);
                     Ok(())
                 }
                 "bind_ip" | "bind" => {

@@ -18,7 +18,7 @@ members = [
     "lib/g3-syslog",
     "lib/g3-journal",
     "lib/g3-fluentd",
-    "lib/g3-statsd",
+    "lib/g3-statsd-client",
     "lib/g3-histogram",
     "lib/g3-xcrypt",
     "lib/g3-ftp-client",
@@ -106,6 +106,7 @@ ip_network = "0.4"
 ip_network_table = "0.2"
 radix_trie = "0.2"
 fixedbitset = "0.4.2"
+bitflags = "2.4"
 lru = { version = "0.12", default-features = false }
 #
 digest = "0.10.7"
@@ -115,7 +116,7 @@ sha-1 = "0.10.0"
 blake3 = { version = "1.4", default-features = false }
 hex = "0.4.2"
 #
-idna = "0.4"
+idna = "0.5"
 url = "2.1"
 mime = "0.3"
 percent-encoding = "2.1"
@@ -126,7 +127,6 @@ h3 = "0.0.3"
 #
 log = "0.4"
 slog = "2"
-cadence = { package = "cadence-with-flush", version = "0.29" }
 hdrhistogram = { version = "7.5", default-features = false }
 #
 clap = "4.4.0"
@@ -153,6 +153,8 @@ quinn = { version = "0.10", default-features = false, features = ["native-certs"
 #
 flume = { version = "0.11", default-features = false }
 #
+c-ares = { version = "8.1", default-features = false }
+c-ares-resolver = { version = "8.1", default-features = false }
 hickory-resolver = { version = "0.24.0", default-features = false }
 hickory-proto = { version = "0.24.0", default-features = false }
 hickory-client = { version = "0.24.0", default-features = false }
@@ -172,7 +174,7 @@ rmp-serde = "1"
 rmp = "0.8"
 rmpv = "1.0"
 #
-redis = { version = "0.23", default-features = false }
+redis = { version = "0.24", default-features = false, features = ["tcp_nodelay"] }
 #
 flate2 = "1.0"
 zip = { version = "0.6", default-features = false }
@@ -201,9 +203,9 @@ g3-msgpack = { version = "0.1", path = "lib/g3-msgpack" }
 g3-resolver = { version = "0.5", path = "lib/g3-resolver" }
 g3-runtime = { version = "0.3", path = "lib/g3-runtime" }
 g3-signal = { version = "0.3", path = "lib/g3-signal" }
-g3-socket = { version = "0.3", path = "lib/g3-socket" }
+g3-socket = { version = "0.4", path = "lib/g3-socket" }
 g3-socks = { version = "0.1", path = "lib/g3-socks" }
-g3-statsd = { version = "0.1", path = "lib/g3-statsd" }
+g3-statsd-client = { version = "0.1", path = "lib/g3-statsd-client" }
 g3-histogram = { version = "0.1", path = "lib/g3-histogram" }
 g3-stdlog = { version = "0.1", path = "lib/g3-stdlog" }
 g3-syslog = { version = "0.6", path = "lib/g3-syslog" }
@@ -212,7 +214,7 @@ g3-geoip = { version = "0.1", path = "lib/g3-geoip" }
 g3-tls-cert = { version = "0.4", path = "lib/g3-tls-cert" }
 g3-types = { version = "0.3", path = "lib/g3-types" }
 g3-xcrypt = { version = "0.1", path = "lib/g3-xcrypt" }
-g3-yaml = { version = "0.4.1", path = "lib/g3-yaml" }
+g3-yaml = { version = "0.5.0", path = "lib/g3-yaml" }
 openssl-async-job = { version = "0.2", path = "lib/openssl-async-job" }
 
 [profile.release-lto]
@@ -227,4 +229,5 @@ debug-assertions = false
 
 [patch.crates-io]
 console = { version = "0.15.7", git = "https://github.com/console-rs/console.git", rev = "51425fc" }
-ring = { version = "0.16.20", git = "https://github.com/zh-jq/ring-repack.git", branch = "patch-0.16" }
+quinn-proto = { version = "0.10.6", git = "https://github.com/zh-jq/quinn.git", branch = "ring-0.17" }
+hickory-proto = { version = "0.24.0", git = "https://github.com/hickory-dns/hickory-dns.git", rev = "b0c0566" }

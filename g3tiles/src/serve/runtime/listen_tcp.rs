@@ -24,16 +24,16 @@ use tokio::runtime::Handle;
 use tokio::sync::broadcast;
 
 use g3_daemon::listen::ListenStats;
-use g3_daemon::server::ClientConnectionInfo;
+use g3_daemon::server::{ClientConnectionInfo, ServerReloadCommand};
 use g3_io_ext::LimitedTcpListener;
 use g3_socket::util::native_socket_addr;
 use g3_types::net::TcpListenConfig;
 
 use crate::config::server::ServerConfig;
-use crate::serve::{ArcServer, ServerReloadCommand, ServerRunContext};
+use crate::serve::ArcServer;
 
 #[derive(Clone)]
-pub(crate) struct OrdinaryTcpServerRuntime {
+pub(crate) struct ListenTcpRuntime {
     server: ArcServer,
     server_type: &'static str,
     server_version: usize,
@@ -42,9 +42,9 @@ pub(crate) struct OrdinaryTcpServerRuntime {
     instance_id: usize,
 }
 
-impl OrdinaryTcpServerRuntime {
+impl ListenTcpRuntime {
     pub(crate) fn new<C: ServerConfig>(server: &ArcServer, server_config: &C) -> Self {
-        OrdinaryTcpServerRuntime {
+        ListenTcpRuntime {
             server: Arc::clone(server),
             server_type: server_config.server_type(),
             server_version: server.version(),
@@ -93,12 +93,6 @@ impl OrdinaryTcpServerRuntime {
     ) {
         use broadcast::error::RecvError;
 
-        let mut run_ctx = ServerRunContext::new(
-            self.server.escaper(),
-            self.server.user_group(),
-            self.server.auditor(),
-        );
-
         loop {
             tokio::select! {
                 biased;
@@ -121,9 +115,6 @@ impl OrdinaryTcpServerRuntime {
                                 }
                             }
                         }
-                        Ok(ServerReloadCommand::ReloadEscaper) => ServerReloadCommand::ReloadEscaper,
-                        Ok(ServerReloadCommand::ReloadUserGroup) => ServerReloadCommand::ReloadUserGroup,
-                        Ok(ServerReloadCommand::ReloadAuditor) => ServerReloadCommand::ReloadAuditor,
                         Ok(ServerReloadCommand::QuitRuntime) => ServerReloadCommand::QuitRuntime,
                         Err(RecvError::Closed) => ServerReloadCommand::QuitRuntime,
                         Err(RecvError::Lagged(dropped)) => {
@@ -134,50 +125,6 @@ impl OrdinaryTcpServerRuntime {
                     };
                     match cmd {
                         ServerReloadCommand::ReloadVersion(_) => {
-                            // if escaper changed, reload it
-                            let old_escaper = run_ctx.current_escaper();
-                            let new_escaper = self.server.escaper();
-                            if old_escaper.ne(new_escaper) {
-                                info!("SRT[{}_v{}#{}] will use escaper '{new_escaper}' instead of '{old_escaper}'",
-                                    self.server.name(), self.server_version, self.instance_id);
-                                run_ctx.update_escaper(new_escaper);
-                            }
-
-                            // if user group changed, reload it
-                            let old_user_group = run_ctx.current_user_group();
-                            let new_user_group = self.server.user_group();
-                            if old_user_group.ne(new_user_group) {
-                                info!("SRT[{}_v{}#{}] will use user group '{new_user_group}' instead of '{old_user_group}'",
-                                    self.server.name(), self.server_version, self.instance_id);
-                                run_ctx.update_user_group(new_user_group);
-                            }
-
-                            // if auditor changed, reload it
-                            let old_auditor = run_ctx.current_auditor();
-                            let new_auditor = self.server.auditor();
-                            if old_auditor.ne(new_auditor) {
-                                info!("SRT[{}_v{}#{}] will use auditor '{new_auditor}' instead of '{old_auditor}'",
-                                    self.server.name(), self.server_version, self.instance_id);
-                                run_ctx.update_audit_handle(new_auditor);
-                            }
-                        }
-                        ServerReloadCommand::ReloadEscaper => {
-                            let escaper_name = self.server.escaper();
-                            info!("SRT[{}_v{}#{}] will reload escaper {escaper_name}",
-                                self.server.name(), self.server_version, self.instance_id);
-                            run_ctx.update_escaper(escaper_name);
-                        }
-                        ServerReloadCommand::ReloadUserGroup => {
-                            let user_group_name = self.server.user_group();
-                            info!("SRT[{}_v{}#{}] will reload user group {user_group_name}",
-                                self.server.name(), self.server_version, self.instance_id);
-                            run_ctx.update_user_group(user_group_name);
-                        }
-                        ServerReloadCommand::ReloadAuditor => {
-                            let auditor_name = self.server.auditor();
-                            info!("SRT[{}_v{}#{}] will reload auditor {auditor_name}",
-                                self.server.name(), self.server_version, self.instance_id);
-                            run_ctx.update_audit_handle(auditor_name);
                         }
                         ServerReloadCommand::QuitRuntime => {
                             info!("SRT[{}_v{}#{}] will go offline",
@@ -203,7 +150,6 @@ impl OrdinaryTcpServerRuntime {
                                     stream,
                                     native_socket_addr(peer_addr),
                                     native_socket_addr(local_addr),
-                                    run_ctx.clone(),
                                 );
                                 Ok(())
                             }
@@ -228,29 +174,24 @@ impl OrdinaryTcpServerRuntime {
         self.post_stop();
     }
 
-    fn run_task(
-        &self,
-        stream: TcpStream,
-        peer_addr: SocketAddr,
-        local_addr: SocketAddr,
-        mut run_ctx: ServerRunContext,
-    ) {
+    fn run_task(&self, stream: TcpStream, peer_addr: SocketAddr, local_addr: SocketAddr) {
         let server = Arc::clone(&self.server);
 
-        let cc_info = ClientConnectionInfo::new(peer_addr, local_addr, stream.as_raw_fd());
+        let mut cc_info = ClientConnectionInfo::new(peer_addr, local_addr);
+        cc_info.set_tcp_raw_fd(stream.as_raw_fd());
         if let Some(worker_id) = self.worker_id {
-            run_ctx.worker_id = Some(worker_id);
+            cc_info.set_worker_id(Some(worker_id));
             tokio::spawn(async move {
-                server.run_tcp_task(stream, cc_info, run_ctx).await;
+                server.run_tcp_task(stream, cc_info).await;
             });
         } else if let Some(rt) = g3_daemon::runtime::worker::select_handle() {
-            run_ctx.worker_id = Some(rt.id);
+            cc_info.set_worker_id(Some(rt.id));
             rt.handle.spawn(async move {
-                server.run_tcp_task(stream, cc_info, run_ctx).await;
+                server.run_tcp_task(stream, cc_info).await;
             });
         } else {
             tokio::spawn(async move {
-                server.run_tcp_task(stream, cc_info, run_ctx).await;
+                server.run_tcp_task(stream, cc_info).await;
             });
         }
     }

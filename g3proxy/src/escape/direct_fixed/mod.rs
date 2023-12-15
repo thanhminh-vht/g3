@@ -102,13 +102,9 @@ impl DirectFixedEscaper {
         Ok(Arc::new(escaper))
     }
 
-    pub(super) fn prepare_initial(config: AnyEscaperConfig) -> anyhow::Result<ArcEscaper> {
-        if let AnyEscaperConfig::DirectFixed(config) = config {
-            let stats = Arc::new(DirectFixedEscaperStats::new(config.name()));
-            DirectFixedEscaper::new_obj(*config, stats)
-        } else {
-            Err(anyhow!("invalid escaper config type"))
-        }
+    pub(super) fn prepare_initial(config: DirectFixedEscaperConfig) -> anyhow::Result<ArcEscaper> {
+        let stats = Arc::new(DirectFixedEscaperStats::new(config.name()));
+        DirectFixedEscaper::new_obj(config, stats)
     }
 
     fn prepare_reload(
@@ -252,7 +248,7 @@ impl DirectFixedEscaper {
     ) -> Vec<Arc<UserUpstreamTrafficStats>> {
         task_notes
             .user_ctx()
-            .map(|ctx| ctx.fetch_upstream_traffic_stats(self.name(), self.stats.extra_tags()))
+            .map(|ctx| ctx.fetch_upstream_traffic_stats(self.name(), self.stats.share_extra_tags()))
             .unwrap_or_default()
     }
 }

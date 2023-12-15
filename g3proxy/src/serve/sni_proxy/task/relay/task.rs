@@ -50,7 +50,7 @@ impl TcpStreamTask {
         wait_time: Duration,
         pre_handshake_stats: TcpStreamConnectionStats,
     ) -> Self {
-        let task_notes = ServerTaskNotes::new(ctx.worker_id, ctx.cc_info.clone(), None, wait_time);
+        let task_notes = ServerTaskNotes::new(ctx.cc_info.clone(), None, wait_time);
         TcpStreamTask {
             ctx,
             protocol,
@@ -122,7 +122,7 @@ impl TcpStreamTask {
         // set client side socket options
         self.ctx
             .cc_info
-            .sock_set_raw_opts(&self.ctx.server_config.tcp_misc_opts, true)
+            .tcp_sock_set_raw_opts(&self.ctx.server_config.tcp_misc_opts, true)
             .map_err(|_| {
                 ServerTaskError::InternalServerError("failed to set client socket options")
             })?;

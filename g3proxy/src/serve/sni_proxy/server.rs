@@ -18,7 +18,10 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::anyhow;
+use arc_swap::{ArcSwap, ArcSwapOption};
 use async_trait::async_trait;
+#[cfg(feature = "quic")]
+use quinn::Connection;
 use slog::Logger;
 use tokio::net::TcpStream;
 use tokio::sync::broadcast;
@@ -26,29 +29,33 @@ use tokio_openssl::SslStream;
 use tokio_rustls::server::TlsStream;
 
 use g3_daemon::listen::ListenStats;
-use g3_daemon::server::ClientConnectionInfo;
+use g3_daemon::server::{ClientConnectionInfo, ServerReloadCommand};
 use g3_dpi::ProtocolPortMap;
 use g3_types::acl::{AclAction, AclNetworkRule};
 use g3_types::metrics::MetricsName;
 
 use super::{ClientHelloAcceptTask, CommonTaskContext, TcpStreamServerStats};
+use crate::audit::AuditHandle;
 use crate::config::server::sni_proxy::SniProxyServerConfig;
 use crate::config::server::{AnyServerConfig, ServerConfig};
+use crate::escape::ArcEscaper;
 use crate::serve::{
-    ArcServer, ArcServerStats, OrdinaryTcpServerRuntime, Server, ServerInternal, ServerQuitPolicy,
-    ServerReloadCommand, ServerRunContext, ServerStats,
+    ArcServer, ArcServerStats, ListenTcpRuntime, Server, ServerInternal, ServerQuitPolicy,
+    ServerStats,
 };
 
 pub(crate) struct SniProxyServer {
     config: Arc<SniProxyServerConfig>,
     server_stats: Arc<TcpStreamServerStats>,
     listen_stats: Arc<ListenStats>,
-    ingress_net_filter: Option<Arc<AclNetworkRule>>,
+    ingress_net_filter: Option<AclNetworkRule>,
     server_tcp_portmap: Arc<ProtocolPortMap>,
     client_tcp_portmap: Arc<ProtocolPortMap>,
     reload_sender: broadcast::Sender<ServerReloadCommand>,
     task_logger: Logger,
 
+    escaper: ArcSwap<ArcEscaper>,
+    audit_handle: ArcSwapOption<AuditHandle>,
     quit_policy: Arc<ServerQuitPolicy>,
     reload_version: usize,
 }
@@ -65,7 +72,7 @@ impl SniProxyServer {
         let ingress_net_filter = config
             .ingress_net_filter
             .as_ref()
-            .map(|builder| Arc::new(builder.build()));
+            .map(|builder| builder.build());
 
         let server_tcp_portmap = Arc::new(config.server_tcp_portmap.clone());
         let client_tcp_portmap = Arc::new(config.client_tcp_portmap.clone());
@@ -73,6 +80,9 @@ impl SniProxyServer {
         let task_logger = config.get_task_logger();
 
         server_stats.set_extra_tags(config.extra_metrics_tags.clone());
+
+        let escaper = Arc::new(crate::escape::get_or_insert_default(config.escaper()));
+        let audit_handle = config.get_audit_handle()?;
 
         let server = SniProxyServer {
             config,
@@ -83,6 +93,8 @@ impl SniProxyServer {
             client_tcp_portmap,
             reload_sender,
             task_logger,
+            escaper: ArcSwap::new(escaper),
+            audit_handle: ArcSwapOption::new(audit_handle),
             quit_policy: Arc::new(ServerQuitPolicy::default()),
             reload_version: version,
         };
@@ -90,17 +102,13 @@ impl SniProxyServer {
         Ok(server)
     }
 
-    pub(crate) fn prepare_initial(config: AnyServerConfig) -> anyhow::Result<ArcServer> {
-        if let AnyServerConfig::SniProxy(config) = config {
-            let config = Arc::new(*config);
-            let server_stats = Arc::new(TcpStreamServerStats::new(config.name()));
-            let listen_stats = Arc::new(ListenStats::new(config.name()));
+    pub(crate) fn prepare_initial(config: SniProxyServerConfig) -> anyhow::Result<ArcServer> {
+        let config = Arc::new(config);
+        let server_stats = Arc::new(TcpStreamServerStats::new(config.name()));
+        let listen_stats = Arc::new(ListenStats::new(config.name()));
 
-            let server = SniProxyServer::new(config, server_stats, listen_stats, 1)?;
-            Ok(Arc::new(server))
-        } else {
-            Err(anyhow!("invalid config type for SniProxy server"))
-        }
+        let server = SniProxyServer::new(config, server_stats, listen_stats, 1)?;
+        Ok(Arc::new(server))
     }
 
     fn prepare_reload(&self, config: AnyServerConfig) -> anyhow::Result<SniProxyServer> {
@@ -138,21 +146,15 @@ impl SniProxyServer {
         false
     }
 
-    async fn run_task(
-        &self,
-        stream: TcpStream,
-        cc_info: ClientConnectionInfo,
-        run_ctx: ServerRunContext,
-    ) {
+    async fn run_task(&self, stream: TcpStream, cc_info: ClientConnectionInfo) {
         let ctx = CommonTaskContext {
             server_config: Arc::clone(&self.config),
             server_stats: Arc::clone(&self.server_stats),
             server_quit_policy: Arc::clone(&self.quit_policy),
-            escaper: run_ctx.escaper,
-            audit_handle: run_ctx.audit_handle,
+            escaper: self.escaper.load().as_ref().clone(),
+            audit_handle: self.audit_handle.load_full(),
             cc_info,
             task_logger: self.task_logger.clone(),
-            worker_id: run_ctx.worker_id,
             server_tcp_portmap: Arc::clone(&self.server_tcp_portmap),
             client_tcp_portmap: Arc::clone(&self.client_tcp_portmap),
         };
@@ -169,8 +171,8 @@ impl ServerInternal for SniProxyServer {
         Ok(())
     }
 
-    fn _get_reload_notifier(&self) -> broadcast::Receiver<ServerReloadCommand> {
-        self.reload_sender.subscribe()
+    fn _depend_on_server(&self, _name: &MetricsName) -> bool {
+        false
     }
 
     fn _reload_config_notify_runtime(&self) {
@@ -178,14 +180,19 @@ impl ServerInternal for SniProxyServer {
         let _ = self.reload_sender.send(cmd);
     }
 
-    fn _reload_escaper_notify_runtime(&self) {
-        let _ = self.reload_sender.send(ServerReloadCommand::ReloadEscaper);
+    fn _update_next_servers_in_place(&self) {}
+
+    fn _update_escaper_in_place(&self) {
+        let escaper = crate::escape::get_or_insert_default(self.config.escaper());
+        self.escaper.store(Arc::new(escaper));
     }
 
-    fn _reload_user_group_notify_runtime(&self) {}
+    fn _update_user_group_in_place(&self) {}
 
-    fn _reload_auditor_notify_runtime(&self) {
-        let _ = self.reload_sender.send(ServerReloadCommand::ReloadAuditor);
+    fn _update_audit_handle_in_place(&self) -> anyhow::Result<()> {
+        let audit_handle = self.config.get_audit_handle()?;
+        self.audit_handle.store(audit_handle);
+        Ok(())
     }
 
     fn _reload_with_old_notifier(&self, config: AnyServerConfig) -> anyhow::Result<ArcServer> {
@@ -203,7 +210,7 @@ impl ServerInternal for SniProxyServer {
         let Some(listen_config) = &self.config.listen else {
             return Ok(());
         };
-        let runtime = OrdinaryTcpServerRuntime::new(server, &*self.config);
+        let runtime = ListenTcpRuntime::new(server, &*self.config);
         runtime
             .run_all_instances(
                 listen_config,
@@ -260,34 +267,26 @@ impl Server for SniProxyServer {
         &self.quit_policy
     }
 
-    async fn run_tcp_task(
-        &self,
-        stream: TcpStream,
-        cc_info: ClientConnectionInfo,
-        ctx: ServerRunContext,
-    ) {
+    async fn run_tcp_task(&self, stream: TcpStream, cc_info: ClientConnectionInfo) {
         let client_addr = cc_info.client_addr();
         self.server_stats.add_conn(client_addr);
         if self.drop_early(client_addr) {
             return;
         }
 
-        self.run_task(stream, cc_info, ctx).await
+        self.run_task(stream, cc_info).await
     }
 
-    async fn run_rustls_task(
-        &self,
-        _stream: TlsStream<TcpStream>,
-        _cc_info: ClientConnectionInfo,
-        _ctx: ServerRunContext,
-    ) {
+    async fn run_rustls_task(&self, _stream: TlsStream<TcpStream>, _cc_info: ClientConnectionInfo) {
     }
 
     async fn run_openssl_task(
         &self,
         _stream: SslStream<TcpStream>,
         _cc_info: ClientConnectionInfo,
-        _ctx: ServerRunContext,
     ) {
     }
+
+    #[cfg(feature = "quic")]
+    async fn run_quic_task(&self, _connection: Connection, _cc_info: ClientConnectionInfo) {}
 }

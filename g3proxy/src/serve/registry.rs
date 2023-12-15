@@ -19,11 +19,10 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
 use once_cell::sync::Lazy;
-use tokio::sync::broadcast;
 
 use g3_types::metrics::MetricsName;
 
-use super::{ArcServer, ServerReloadCommand};
+use super::ArcServer;
 use crate::config::server::AnyServerConfig;
 use crate::serve::dummy_close::DummyCloseServer;
 
@@ -140,7 +139,7 @@ pub(crate) fn reload_only_escaper(name: &MetricsName) -> anyhow::Result<()> {
         return Err(anyhow!("no server with name {name} found"));
     };
 
-    server._reload_escaper_notify_runtime();
+    server._update_escaper_in_place();
     Ok(())
 }
 
@@ -150,7 +149,7 @@ pub(crate) fn reload_only_user_group(name: &MetricsName) -> anyhow::Result<()> {
         return Err(anyhow!("no server with name {name} found"));
     };
 
-    server._reload_user_group_notify_runtime();
+    server._update_user_group_in_place();
     Ok(())
 }
 
@@ -160,7 +159,7 @@ pub(crate) fn reload_only_auditor(name: &MetricsName) -> anyhow::Result<()> {
         return Err(anyhow!("no server with name {name} found"));
     };
 
-    server._reload_auditor_notify_runtime();
+    server._update_audit_handle_in_place()?;
     Ok(())
 }
 
@@ -192,14 +191,9 @@ where
     }
 }
 
-/// the notifier should be got while holding the lock
-pub(crate) fn get_with_notifier(
-    name: &MetricsName,
-) -> (ArcServer, broadcast::Receiver<ServerReloadCommand>) {
+pub(crate) fn get_or_insert_default(name: &MetricsName) -> ArcServer {
     let mut ht = RUNTIME_SERVER_REGISTRY.lock().unwrap();
-    let server = ht
-        .entry(name.clone())
-        .or_insert_with(|| DummyCloseServer::prepare_default(name));
-    let server_reload_channel = server._get_reload_notifier();
-    (Arc::clone(server), server_reload_channel)
+    ht.entry(name.clone())
+        .or_insert_with(|| DummyCloseServer::prepare_default(name))
+        .clone()
 }

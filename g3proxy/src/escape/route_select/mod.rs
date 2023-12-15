@@ -83,7 +83,7 @@ impl RouteSelectEscaper {
 
         let select_nodes = select_nodes_builder
             .build()
-            .map_err(|e| anyhow!("failed to build next escaper selector: {e:?}"))?;
+            .ok_or_else(|| anyhow!("no next escaper set"))?;
 
         let escaper = RouteSelectEscaper {
             config,
@@ -95,13 +95,9 @@ impl RouteSelectEscaper {
         Ok(Arc::new(escaper))
     }
 
-    pub(super) fn prepare_initial(config: AnyEscaperConfig) -> anyhow::Result<ArcEscaper> {
-        if let AnyEscaperConfig::RouteSelect(config) = config {
-            let stats = Arc::new(RouteEscaperStats::new(config.name()));
-            RouteSelectEscaper::new_obj(config, stats)
-        } else {
-            Err(anyhow!("invalid escaper config type"))
-        }
+    pub(super) fn prepare_initial(config: RouteSelectEscaperConfig) -> anyhow::Result<ArcEscaper> {
+        let stats = Arc::new(RouteEscaperStats::new(config.name()));
+        RouteSelectEscaper::new_obj(config, stats)
     }
 
     fn prepare_reload(
@@ -126,7 +122,7 @@ impl RouteSelectEscaper {
         }
         next_nodes
             .build()
-            .map_err(|e| anyhow!("failed to build selective vec: {e}"))
+            .ok_or_else(|| anyhow!("no next escaper set"))
     }
 
     fn select_next_from_egress_path(

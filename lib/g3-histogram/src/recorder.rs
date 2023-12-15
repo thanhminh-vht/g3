@@ -14,15 +14,20 @@
  * limitations under the License.
  */
 
-use std::env;
+use hdrhistogram::Counter;
+use tokio::sync::mpsc;
 
-#[allow(clippy::unusual_byte_groupings)]
-fn main() {
-    if let Ok(version) = env::var("DEP_OPENSSL_VERSION_NUMBER") {
-        let version = u64::from_str_radix(&version, 16).unwrap();
+#[derive(Clone)]
+pub struct HistogramRecorder<T: Counter> {
+    sender: mpsc::UnboundedSender<T>,
+}
 
-        if version >= 0x3_00_00_00_0 {
-            println!("cargo:rustc-cfg=ossl300");
-        }
+impl<T: Counter> HistogramRecorder<T> {
+    pub(crate) fn new(sender: mpsc::UnboundedSender<T>) -> Self {
+        HistogramRecorder { sender }
+    }
+
+    pub fn record(&self, v: T) -> Result<(), mpsc::error::SendError<T>> {
+        self.sender.send(v)
     }
 }

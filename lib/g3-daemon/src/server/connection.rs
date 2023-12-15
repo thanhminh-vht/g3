@@ -23,23 +23,30 @@ use g3_types::net::TcpMiscSockOpts;
 
 #[derive(Clone, Debug)]
 pub struct ClientConnectionInfo {
+    worker_id: Option<usize>,
     client_addr: SocketAddr,
     server_addr: SocketAddr,
     sock_peer_addr: SocketAddr,
     #[allow(unused)]
     sock_local_addr: SocketAddr,
-    sock_raw_fd: RawFd,
+    tcp_sock_raw_fd: Option<RawFd>,
 }
 
 impl ClientConnectionInfo {
-    pub fn new(peer_addr: SocketAddr, local_addr: SocketAddr, raw_fd: RawFd) -> Self {
+    pub fn new(peer_addr: SocketAddr, local_addr: SocketAddr) -> Self {
         ClientConnectionInfo {
+            worker_id: None,
             client_addr: peer_addr,
             server_addr: local_addr,
             sock_peer_addr: peer_addr,
             sock_local_addr: local_addr,
-            sock_raw_fd: raw_fd,
+            tcp_sock_raw_fd: None,
         }
+    }
+
+    #[inline]
+    pub fn set_tcp_raw_fd(&mut self, raw_fd: RawFd) {
+        self.tcp_sock_raw_fd = Some(raw_fd);
     }
 
     #[inline]
@@ -49,10 +56,21 @@ impl ClientConnectionInfo {
     }
 
     #[inline]
+    pub fn set_worker_id(&mut self, worker_id: Option<usize>) {
+        self.worker_id = worker_id;
+    }
+
+    #[inline]
+    pub fn worker_id(&self) -> Option<usize> {
+        self.worker_id
+    }
+
+    #[inline]
     pub fn client_addr(&self) -> SocketAddr {
         self.client_addr
     }
 
+    #[inline]
     pub fn client_ip(&self) -> IpAddr {
         self.client_addr.ip()
     }
@@ -62,6 +80,7 @@ impl ClientConnectionInfo {
         self.server_addr
     }
 
+    #[inline]
     pub fn server_ip(&self) -> IpAddr {
         self.server_addr.ip()
     }
@@ -81,11 +100,15 @@ impl ClientConnectionInfo {
         self.sock_local_addr
     }
 
-    pub fn sock_set_raw_opts(
+    pub fn tcp_sock_set_raw_opts(
         &self,
         opts: &TcpMiscSockOpts,
         default_set_nodelay: bool,
     ) -> io::Result<()> {
-        g3_socket::tcp::set_raw_opts(self.sock_raw_fd, opts, default_set_nodelay)
+        if let Some(raw_fd) = self.tcp_sock_raw_fd {
+            g3_socket::tcp::set_raw_opts(raw_fd, opts, default_set_nodelay)
+        } else {
+            Ok(())
+        }
     }
 }

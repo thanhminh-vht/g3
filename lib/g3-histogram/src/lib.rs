@@ -14,8 +14,14 @@
  * limitations under the License.
  */
 
-mod sync;
-pub use sync::{DurationHistogram, HistogramRecorder};
+mod recorder;
+pub use recorder::HistogramRecorder;
+
+mod rotating;
+pub use rotating::RotatingHistogram;
+
+mod keeping;
+pub use keeping::KeepingHistogram;
 
 mod stats;
 pub use stats::HistogramStats;

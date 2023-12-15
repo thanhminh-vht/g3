@@ -20,7 +20,7 @@ use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
 
 use socket2::{Domain, SockAddr, Socket, Type};
 
-use g3_types::net::{PortRange, SocketBufferConfig, UdpMiscSockOpts};
+use g3_types::net::{PortRange, SocketBufferConfig, UdpListenConfig, UdpMiscSockOpts};
 
 use super::sockopt::set_bind_address_no_port;
 use super::util::AddressFamily;
@@ -29,7 +29,7 @@ pub fn new_std_socket_to(
     peer_addr: SocketAddr,
     bind_ip: Option<IpAddr>,
     buf_conf: SocketBufferConfig,
-    misc_opts: &UdpMiscSockOpts,
+    misc_opts: UdpMiscSockOpts,
 ) -> io::Result<UdpSocket> {
     let peer_family = AddressFamily::from(&peer_addr);
     let socket = new_udp_socket(peer_family, buf_conf)?;
@@ -51,7 +51,7 @@ pub fn new_std_socket_to(
 pub fn new_std_bind_connect(
     bind_ip: Option<IpAddr>,
     buf_conf: SocketBufferConfig,
-    misc_opts: &UdpMiscSockOpts,
+    misc_opts: UdpMiscSockOpts,
 ) -> io::Result<(UdpSocket, SocketAddr)> {
     let bind_addr = match bind_ip {
         Some(ip) => SocketAddr::new(ip, 0),
@@ -71,7 +71,7 @@ pub fn new_std_in_range_bind_connect(
     bind_ip: IpAddr,
     port: PortRange,
     buf_conf: SocketBufferConfig,
-    misc_opts: &UdpMiscSockOpts,
+    misc_opts: UdpMiscSockOpts,
 ) -> io::Result<(UdpSocket, SocketAddr)> {
     let port_start = port.start();
     let port_end = port.end();
@@ -112,7 +112,7 @@ pub fn new_std_bind_relay(
     bind_ip: Option<IpAddr>,
     family: AddressFamily,
     buf_conf: SocketBufferConfig,
-    misc_opts: &UdpMiscSockOpts,
+    misc_opts: UdpMiscSockOpts,
 ) -> io::Result<UdpSocket> {
     let bind_addr = match bind_ip {
         Some(ip) => SocketAddr::new(ip, 0),
@@ -128,14 +128,50 @@ pub fn new_std_bind_relay(
     Ok(UdpSocket::from(socket))
 }
 
-pub fn set_raw_opts(fd: RawFd, misc_opts: &UdpMiscSockOpts) -> io::Result<()> {
+pub fn new_std_bind_listen(config: &UdpListenConfig) -> io::Result<UdpSocket> {
+    let addr = config.address();
+    let socket = new_udp_socket(AddressFamily::from(&addr), config.socket_buffer())?;
+    if addr.port() != 0 {
+        socket.set_reuse_port(true)?;
+    }
+    if config.is_ipv6only() {
+        socket.set_only_v6(true)?;
+    }
+    let bind_addr = SockAddr::from(addr);
+    socket.bind(&bind_addr)?;
+    set_misc_opts(&socket, config.socket_misc_opts())?;
+    Ok(UdpSocket::from(socket))
+}
+
+pub fn new_std_rebind_listen(config: &UdpListenConfig, addr: SocketAddr) -> io::Result<UdpSocket> {
+    let socket = new_udp_socket(AddressFamily::from(&addr), config.socket_buffer())?;
+    if addr.port() != 0 {
+        socket.set_reuse_port(true)?;
+    }
+    if config.is_ipv6only() {
+        socket.set_only_v6(true)?;
+    }
+    let bind_addr = SockAddr::from(addr);
+    socket.bind(&bind_addr)?;
+    set_misc_opts(&socket, config.socket_misc_opts())?;
+    Ok(UdpSocket::from(socket))
+}
+
+pub fn set_raw_opts(fd: RawFd, misc_opts: UdpMiscSockOpts) -> io::Result<()> {
     let socket = unsafe { Socket::from_raw_fd(fd) };
     set_misc_opts(&socket, misc_opts)?;
     let _ = socket.into_raw_fd();
     Ok(())
 }
 
-fn set_misc_opts(socket: &Socket, misc_opts: &UdpMiscSockOpts) -> io::Result<()> {
+pub fn set_raw_buf_opts(fd: RawFd, buf_conf: SocketBufferConfig) -> io::Result<()> {
+    let socket = unsafe { Socket::from_raw_fd(fd) };
+    set_buf_opts(&socket, buf_conf)?;
+    let _ = socket.into_raw_fd();
+    Ok(())
+}
+
+fn set_misc_opts(socket: &Socket, misc_opts: UdpMiscSockOpts) -> io::Result<()> {
     if let Some(ttl) = misc_opts.time_to_live {
         socket.set_ttl(ttl)?;
     }
@@ -151,13 +187,18 @@ fn set_misc_opts(socket: &Socket, misc_opts: &UdpMiscSockOpts) -> io::Result<()>
 
 fn new_udp_socket(family: AddressFamily, buf_conf: SocketBufferConfig) -> io::Result<Socket> {
     let socket = new_nonblocking_udp_socket(family)?;
+    set_buf_opts(&socket, buf_conf)?;
+    Ok(socket)
+}
+
+fn set_buf_opts(socket: &Socket, buf_conf: SocketBufferConfig) -> io::Result<()> {
     if let Some(size) = buf_conf.recv_size() {
         socket.set_recv_buffer_size(size)?;
     }
     if let Some(size) = buf_conf.send_size() {
         socket.set_send_buffer_size(size)?;
     }
-    Ok(socket)
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -190,7 +231,7 @@ mod tests {
             peer_addr,
             Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
             SocketBufferConfig::default(),
-            &Default::default(),
+            Default::default(),
         )
         .unwrap();
         let local_addr = socket.local_addr().unwrap();
@@ -205,7 +246,7 @@ mod tests {
         let (_socket, local_addr) = new_std_bind_connect(
             Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
             SocketBufferConfig::default(),
-            &Default::default(),
+            Default::default(),
         )
         .unwrap();
         assert_ne!(local_addr.port(), 0);
@@ -224,7 +265,7 @@ mod tests {
                 ip,
                 range,
                 SocketBufferConfig::default(),
-                &Default::default(),
+                Default::default(),
             )
             .unwrap();
             let port_real = local_addr.port();

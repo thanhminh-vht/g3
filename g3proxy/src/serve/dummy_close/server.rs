@@ -18,20 +18,20 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
+#[cfg(feature = "quic")]
+use quinn::Connection;
 use tokio::net::TcpStream;
 use tokio::sync::broadcast;
 use tokio_openssl::SslStream;
 use tokio_rustls::server::TlsStream;
 
 use g3_daemon::listen::ListenStats;
-use g3_daemon::server::ClientConnectionInfo;
+use g3_daemon::server::{ClientConnectionInfo, ServerReloadCommand};
 use g3_types::metrics::MetricsName;
 
 use crate::config::server::dummy_close::DummyCloseServerConfig;
 use crate::config::server::{AnyServerConfig, ServerConfig};
-use crate::serve::{
-    ArcServer, Server, ServerInternal, ServerQuitPolicy, ServerReloadCommand, ServerRunContext,
-};
+use crate::serve::{ArcServer, Server, ServerInternal, ServerQuitPolicy};
 
 pub(crate) struct DummyCloseServer {
     config: DummyCloseServerConfig,
@@ -53,15 +53,11 @@ impl DummyCloseServer {
         }
     }
 
-    pub(crate) fn prepare_initial(config: AnyServerConfig) -> anyhow::Result<ArcServer> {
-        if let AnyServerConfig::DummyClose(config) = config {
-            let listen_stats = Arc::new(ListenStats::new(config.name()));
+    pub(crate) fn prepare_initial(config: DummyCloseServerConfig) -> anyhow::Result<ArcServer> {
+        let listen_stats = Arc::new(ListenStats::new(config.name()));
 
-            let server = DummyCloseServer::new(config, listen_stats);
-            Ok(Arc::new(server))
-        } else {
-            Err(anyhow!("invalid config type for DummyClose server"))
-        }
+        let server = DummyCloseServer::new(config, listen_stats);
+        Ok(Arc::new(server))
     }
 
     pub(crate) fn prepare_default(name: &MetricsName) -> ArcServer {
@@ -95,15 +91,22 @@ impl ServerInternal for DummyCloseServer {
         Ok(())
     }
 
-    fn _get_reload_notifier(&self) -> broadcast::Receiver<ServerReloadCommand> {
-        self.reload_sender.subscribe()
+    fn _depend_on_server(&self, _name: &MetricsName) -> bool {
+        false
     }
 
     // DummyClose server do not support reload with old runtime/notifier
     fn _reload_config_notify_runtime(&self) {}
-    fn _reload_escaper_notify_runtime(&self) {}
-    fn _reload_user_group_notify_runtime(&self) {}
-    fn _reload_auditor_notify_runtime(&self) {}
+
+    fn _update_next_servers_in_place(&self) {}
+
+    fn _update_escaper_in_place(&self) {}
+
+    fn _update_user_group_in_place(&self) {}
+
+    fn _update_audit_handle_in_place(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
 
     fn _reload_with_old_notifier(&self, config: AnyServerConfig) -> anyhow::Result<ArcServer> {
         Err(anyhow!(
@@ -161,27 +164,18 @@ impl Server for DummyCloseServer {
         &self.quit_policy
     }
 
-    async fn run_tcp_task(
-        &self,
-        _stream: TcpStream,
-        _cc_info: ClientConnectionInfo,
-        _ctx: ServerRunContext,
-    ) {
-    }
+    async fn run_tcp_task(&self, _stream: TcpStream, _cc_info: ClientConnectionInfo) {}
 
-    async fn run_rustls_task(
-        &self,
-        _stream: TlsStream<TcpStream>,
-        _cc_info: ClientConnectionInfo,
-        _ctx: ServerRunContext,
-    ) {
+    async fn run_rustls_task(&self, _stream: TlsStream<TcpStream>, _cc_info: ClientConnectionInfo) {
     }
 
     async fn run_openssl_task(
         &self,
         _stream: SslStream<TcpStream>,
         _cc_info: ClientConnectionInfo,
-        _ctx: ServerRunContext,
     ) {
     }
+
+    #[cfg(feature = "quic")]
+    async fn run_quic_task(&self, _connection: Connection, _cc_info: ClientConnectionInfo) {}
 }

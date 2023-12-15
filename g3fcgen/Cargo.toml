@@ -1,9 +1,9 @@
 [package]
 name = "g3fcgen"
-version = "0.6.0"
+version = "0.6.1"
 license.workspace = true
 edition.workspace = true
-rust-version = "1.70.0"
+rust-version = "1.74.0"
 description = "G3 fake certificate generator"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -19,13 +19,12 @@ openssl-probe = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["macros", "net", "io-util", "time"] }
 flume = { workspace = true, features = ["async"] }
 yaml-rust.workspace = true
-cadence.workspace = true
 g3-types.workspace = true
 g3-runtime.workspace = true
 g3-msgpack.workspace = true
 g3-yaml = { workspace = true, features = ["histogram"] }
 g3-daemon.workspace = true
-g3-statsd.workspace = true
+g3-statsd-client.workspace = true
 g3-histogram.workspace = true
 g3-tls-cert.workspace = true
 g3-compat.workspace = true

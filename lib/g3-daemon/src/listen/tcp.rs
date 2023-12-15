@@ -18,23 +18,30 @@ use std::net::SocketAddr;
 use std::os::fd::AsRawFd;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use log::{info, warn};
 use tokio::net::TcpStream;
 use tokio::runtime::Handle;
 use tokio::sync::broadcast;
 
-use g3_daemon::listen::ListenStats;
-use g3_daemon::server::ClientConnectionInfo;
 use g3_io_ext::LimitedTcpListener;
 use g3_socket::util::native_socket_addr;
 use g3_types::net::TcpListenConfig;
 
-use crate::config::server::ServerConfig;
-use crate::serve::{ArcServer, ServerReloadCommand, ServerRunContext};
+use crate::listen::ListenStats;
+use crate::server::{BaseServer, ClientConnectionInfo, ServerReloadCommand};
+
+#[async_trait]
+pub trait AcceptTcpServer: BaseServer {
+    async fn run_tcp_task(&self, stream: TcpStream, cc_info: ClientConnectionInfo);
+    fn get_reloaded(&self) -> ArcAcceptTcpServer;
+}
+
+pub type ArcAcceptTcpServer = Arc<dyn AcceptTcpServer + Send + Sync>;
 
 #[derive(Clone)]
-pub(crate) struct OrdinaryTcpServerRuntime {
-    server: ArcServer,
+pub struct ListenTcpRuntime {
+    server: ArcAcceptTcpServer,
     server_type: &'static str,
     server_version: usize,
     worker_id: Option<usize>,
@@ -42,14 +49,14 @@ pub(crate) struct OrdinaryTcpServerRuntime {
     instance_id: usize,
 }
 
-impl OrdinaryTcpServerRuntime {
-    pub(crate) fn new<C: ServerConfig>(server: &ArcServer, server_config: &C) -> Self {
-        OrdinaryTcpServerRuntime {
+impl ListenTcpRuntime {
+    pub fn new(server: &ArcAcceptTcpServer, listen_stats: Arc<ListenStats>) -> Self {
+        ListenTcpRuntime {
             server: Arc::clone(server),
-            server_type: server_config.server_type(),
+            server_type: server.server_type(),
             server_version: server.version(),
             worker_id: None,
-            listen_stats: server.get_listen_stats(),
+            listen_stats,
             instance_id: 0,
         }
     }
@@ -93,54 +100,39 @@ impl OrdinaryTcpServerRuntime {
     ) {
         use broadcast::error::RecvError;
 
-        let run_ctx = ServerRunContext::new();
-
         loop {
             tokio::select! {
                 biased;
 
                 ev = server_reload_channel.recv() => {
-                    let cmd = match ev {
+                   match ev {
                         Ok(ServerReloadCommand::ReloadVersion(version)) => {
                             info!("SRT[{}_v{}#{}] received reload request from v{version}",
                                 self.server.name(), self.server_version, self.instance_id);
-                            match crate::serve::get_server(self.server.name()) {
-                                Ok(server) => {
-                                    self.server_version = server.version();
-                                    self.server = server;
-                                    ServerReloadCommand::ReloadVersion(version)
-                                }
-                                Err(_) => {
-                                    info!("SRT[{}_v{}#{}] will quit as no server v{version}+ found",
-                                        self.server.name(), self.server_version, self.instance_id);
-                                    ServerReloadCommand::QuitRuntime
-                                }
-                            }
+                            let new_server = self.server.get_reloaded();
+                            self.server_version = new_server.version();
+                            self.server = new_server;
+                            continue;
                         }
-                        Ok(ServerReloadCommand::QuitRuntime) => ServerReloadCommand::QuitRuntime,
-                        Err(RecvError::Closed) => ServerReloadCommand::QuitRuntime,
+                        Ok(ServerReloadCommand::QuitRuntime) => {},
+                        Err(RecvError::Closed) => {},
                         Err(RecvError::Lagged(dropped)) => {
                             warn!("SRT[{}_v{}#{}] server {} reload notify channel overflowed, {dropped} msg dropped",
                                 self.server.name(), self.server_version, self.instance_id, self.server.name());
-                            continue
+                            continue;
                         },
-                    };
-                    match cmd {
-                        ServerReloadCommand::ReloadVersion(_) => {
-                        }
-                        ServerReloadCommand::QuitRuntime => {
-                            info!("SRT[{}_v{}#{}] will go offline",
-                                self.server.name(), self.server_version, self.instance_id);
-                            self.pre_stop();
-                            let accept_again = listener.set_offline();
-                            if accept_again {
-                                info!("SRT[{}_v{}#{}] will accept all pending connections",
-                                    self.server.name(), self.server_version, self.instance_id);
-                                continue;
-                            } else {
-                                break;
-                            }
-                        }
+                    }
+
+                    info!("SRT[{}_v{}#{}] will go offline",
+                        self.server.name(), self.server_version, self.instance_id);
+                    self.pre_stop();
+                    let accept_again = listener.set_offline();
+                    if accept_again {
+                        info!("SRT[{}_v{}#{}] will accept all pending connections",
+                            self.server.name(), self.server_version, self.instance_id);
+                        continue;
+                    } else {
+                        break;
                     }
                 }
                 result = listener.accept() => {
@@ -152,7 +144,6 @@ impl OrdinaryTcpServerRuntime {
                                     stream,
                                     native_socket_addr(peer_addr),
                                     native_socket_addr(local_addr),
-                                    run_ctx.clone(),
                                 );
                                 Ok(())
                             }
@@ -177,36 +168,31 @@ impl OrdinaryTcpServerRuntime {
         self.post_stop();
     }
 
-    fn run_task(
-        &self,
-        stream: TcpStream,
-        peer_addr: SocketAddr,
-        local_addr: SocketAddr,
-        mut run_ctx: ServerRunContext,
-    ) {
+    fn run_task(&self, stream: TcpStream, peer_addr: SocketAddr, local_addr: SocketAddr) {
         let server = Arc::clone(&self.server);
 
-        let cc_info = ClientConnectionInfo::new(peer_addr, local_addr, stream.as_raw_fd());
+        let mut cc_info = ClientConnectionInfo::new(peer_addr, local_addr);
+        cc_info.set_tcp_raw_fd(stream.as_raw_fd());
         if let Some(worker_id) = self.worker_id {
-            run_ctx.worker_id = Some(worker_id);
+            cc_info.set_worker_id(Some(worker_id));
             tokio::spawn(async move {
-                server.run_tcp_task(stream, cc_info, run_ctx).await;
+                server.run_tcp_task(stream, cc_info).await;
             });
-        } else if let Some(rt) = g3_daemon::runtime::worker::select_handle() {
-            run_ctx.worker_id = Some(rt.id);
+        } else if let Some(rt) = crate::runtime::worker::select_handle() {
+            cc_info.set_worker_id(Some(rt.id));
             rt.handle.spawn(async move {
-                server.run_tcp_task(stream, cc_info, run_ctx).await;
+                server.run_tcp_task(stream, cc_info).await;
             });
         } else {
             tokio::spawn(async move {
-                server.run_tcp_task(stream, cc_info, run_ctx).await;
+                server.run_tcp_task(stream, cc_info).await;
             });
         }
     }
 
     fn get_rt_handle(&mut self, listen_in_worker: bool) -> Handle {
         if listen_in_worker {
-            if let Some(rt) = g3_daemon::runtime::worker::select_listen_handle() {
+            if let Some(rt) = crate::runtime::worker::select_listen_handle() {
                 self.worker_id = Some(rt.id);
                 return rt.handle;
             }
@@ -241,7 +227,7 @@ impl OrdinaryTcpServerRuntime {
         });
     }
 
-    pub(crate) fn run_all_instances(
+    pub fn run_all_instances(
         &self,
         listen_config: &TcpListenConfig,
         listen_in_worker: bool,
@@ -249,7 +235,7 @@ impl OrdinaryTcpServerRuntime {
     ) -> anyhow::Result<()> {
         let mut instance_count = listen_config.instance();
         if listen_in_worker {
-            let worker_count = g3_daemon::runtime::worker::worker_count();
+            let worker_count = crate::runtime::worker::worker_count();
             if worker_count > 0 {
                 instance_count = worker_count;
             }

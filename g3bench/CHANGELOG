@@ -1,4 +1,15 @@
 
+v0.8.8:
+ - BUG FIX: fix the parsing of PROXY Protocol address
+ - Feature: make quic and hickory as optional features
+ - Optimization: more efficient sending of StatsD metrics
+
+v0.8.7:
+ - Compatibility: require openssl version 3.0
+
+v0.8.6:
+ - Compatibility: update build dependencies
+
 v0.8.5:
  - Feature: emit histogram duration metrics
  - Feature: add socks5 proxy support to h3 target

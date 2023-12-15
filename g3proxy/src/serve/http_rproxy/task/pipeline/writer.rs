@@ -136,7 +136,7 @@ where
                             user,
                             user_type,
                             self.ctx.server_config.name(),
-                            self.ctx.server_stats.extra_tags(),
+                            self.ctx.server_stats.share_extra_tags(),
                         )
                     } else {
                         return Err(UserAuthError::NoUserSupplied);
@@ -151,7 +151,7 @@ where
                             user,
                             user_type,
                             self.ctx.server_config.name(),
-                            self.ctx.server_stats.extra_tags(),
+                            self.ctx.server_stats.share_extra_tags(),
                         );
                         user_ctx.check_password(password.as_original())?;
                         user_ctx
@@ -162,7 +162,7 @@ where
 
             user_ctx.check_in_site(
                 self.ctx.server_config.name(),
-                self.ctx.server_stats.extra_tags(),
+                self.ctx.server_stats.share_extra_tags(),
                 &req.upstream,
             );
             self.req_count
@@ -274,7 +274,6 @@ where
     ) -> LoopAction {
         let path_selection = self.get_egress_path_selection(user_ctx.as_ref());
         let task_notes = ServerTaskNotes::with_path_selection(
-            self.ctx.worker_id,
             self.ctx.cc_info.clone(),
             user_ctx,
             req.time_accepted.elapsed(),

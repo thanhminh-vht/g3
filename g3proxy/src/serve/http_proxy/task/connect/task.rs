@@ -314,7 +314,7 @@ impl HttpProxyConnectTask {
         // set client side socket options
         self.ctx
             .cc_info
-            .sock_set_raw_opts(&tcp_client_misc_opts, true)
+            .tcp_sock_set_raw_opts(&tcp_client_misc_opts, true)
             .map_err(|_| {
                 ServerTaskError::InternalServerError("failed to set client socket options")
             })?;
@@ -518,7 +518,7 @@ impl HttpProxyConnectTask {
         let limit_config = if let Some(user_ctx) = self.task_notes.user_ctx() {
             wrapper_stats.push_user_io_stats(user_ctx.fetch_traffic_stats(
                 self.ctx.server_config.name(),
-                self.ctx.server_stats.extra_tags(),
+                self.ctx.server_stats.share_extra_tags(),
             ));
 
             user_ctx

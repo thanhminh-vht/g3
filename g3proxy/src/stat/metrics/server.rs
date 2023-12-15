@@ -14,18 +14,16 @@
  * limitations under the License.
  */
 
-use std::convert::TryFrom;
 use std::sync::{Arc, Mutex};
 
 use ahash::AHashMap;
-use cadence::{Counted, Gauged, StatsdClient};
 use once_cell::sync::Lazy;
 
 use g3_daemon::listen::{ListenSnapshot, ListenStats};
-use g3_daemon::metric::{
+use g3_daemon::metrics::{
     ServerMetricExt, TAG_KEY_TRANSPORT, TRANSPORT_TYPE_TCP, TRANSPORT_TYPE_UDP,
 };
-use g3_types::metrics::{MetricsName, StaticMetricsTags};
+use g3_statsd_client::{StatsdClient, StatsdTagGroup};
 use g3_types::stats::{StatId, TcpIoSnapshot, UdpIoSnapshot};
 
 use crate::serve::{ArcServerStats, ServerForbiddenSnapshot};
@@ -86,7 +84,7 @@ pub(in crate::stat) fn sync_stats() {
     drop(listen_stats_map);
 }
 
-pub(in crate::stat) fn emit_stats(client: &StatsdClient) {
+pub(in crate::stat) fn emit_stats(client: &mut StatsdClient) {
     let mut server_stats_map = SERVER_STATS_MAP.lock().unwrap();
     server_stats_map.retain(|_, (stats, snap)| {
         emit_server_stats(client, stats, snap);
@@ -97,115 +95,74 @@ pub(in crate::stat) fn emit_stats(client: &StatsdClient) {
 
     let mut listen_stats_map = LISTEN_STATS_MAP.lock().unwrap();
     listen_stats_map.retain(|_, (stats, snap)| {
-        g3_daemon::metric::emit_listen_stats(client, stats, snap);
+        g3_daemon::metrics::emit_listen_stats(client, stats, snap);
         // use Arc instead of Weak here, as we should emit the final metrics before drop it
         Arc::strong_count(stats) > 1
     });
 }
 
-fn emit_server_stats(client: &StatsdClient, stats: &ArcServerStats, snap: &mut ServerSnapshot) {
-    let online_value = if stats.is_online() { "y" } else { "n" };
-    let server = stats.name();
-    let mut buffer = itoa::Buffer::new();
-    let stat_id = buffer.format(stats.stat_id().as_u64());
-
-    let guard = stats.extra_tags().load();
-    let server_extra_tags = guard.as_ref().map(Arc::clone);
-    drop(guard);
+fn emit_server_stats(client: &mut StatsdClient, stats: &ArcServerStats, snap: &mut ServerSnapshot) {
+    let mut common_tags = StatsdTagGroup::default();
+    common_tags.add_server_tags(stats.name(), stats.is_online(), stats.stat_id());
+    if let Some(tags) = stats.load_extra_tags() {
+        common_tags.add_static_tags(&tags);
+    }
 
     let new_value = stats.get_conn_total();
-    let diff_value = i64::try_from(new_value.wrapping_sub(snap.conn_total)).unwrap_or(i64::MAX);
+    let diff_value = new_value.wrapping_sub(snap.conn_total);
     client
-        .count_with_tags(METRIC_NAME_SERVER_CONN_TOTAL, diff_value)
-        .add_server_tags(server, online_value, stat_id)
-        .add_server_extra_tags(&server_extra_tags)
+        .count_with_tags(METRIC_NAME_SERVER_CONN_TOTAL, diff_value, &common_tags)
         .send();
     snap.conn_total = new_value;
 
     let new_value = stats.get_task_total();
-    let diff_value = i64::try_from(new_value.wrapping_sub(snap.task_total)).unwrap_or(i64::MAX);
+    let diff_value = new_value.wrapping_sub(snap.task_total);
     client
-        .count_with_tags(METRIC_NAME_SERVER_TASK_TOTAL, diff_value)
-        .add_server_tags(server, online_value, stat_id)
-        .add_server_extra_tags(&server_extra_tags)
+        .count_with_tags(METRIC_NAME_SERVER_TASK_TOTAL, diff_value, &common_tags)
         .send();
     snap.task_total = new_value;
 
     client
         .gauge_with_tags(
             METRIC_NAME_SERVER_TASK_ALIVE,
-            stats.get_alive_count() as f64,
+            stats.get_alive_count(),
+            &common_tags,
         )
-        .add_server_tags(server, online_value, stat_id)
-        .add_server_extra_tags(&server_extra_tags)
         .send();
 
     emit_forbidden_stats(
         client,
         stats.forbidden_stats(),
         &mut snap.forbidden,
-        online_value,
-        server,
-        &server_extra_tags,
-        stat_id,
+        &common_tags,
     );
 
     if let Some(tcp_io_stats) = stats.tcp_io_snapshot() {
-        emit_tcp_io_to_statsd(
-            client,
-            tcp_io_stats,
-            &mut snap.tcp,
-            online_value,
-            server,
-            &server_extra_tags,
-            stat_id,
-        );
+        emit_tcp_io_to_statsd(client, tcp_io_stats, &mut snap.tcp, &common_tags);
     }
 
     if let Some(udp_io_stats) = stats.udp_io_snapshot() {
-        emit_udp_io_to_statsd(
-            client,
-            udp_io_stats,
-            &mut snap.udp,
-            online_value,
-            server,
-            &server_extra_tags,
-            stat_id,
-        );
+        emit_udp_io_to_statsd(client, udp_io_stats, &mut snap.udp, &common_tags);
     }
 
     if let Some(untrusted_stats) = stats.untrusted_snapshot() {
-        emit_untrusted_stats(
-            client,
-            untrusted_stats,
-            &mut snap.untrusted,
-            online_value,
-            server,
-            &server_extra_tags,
-            stat_id,
-        );
+        emit_untrusted_stats(client, untrusted_stats, &mut snap.untrusted, &common_tags);
     }
 }
 
 fn emit_forbidden_stats(
-    client: &StatsdClient,
+    client: &mut StatsdClient,
     stats: ServerForbiddenSnapshot,
     snap: &mut ServerForbiddenSnapshot,
-    online_value: &str,
-    server: &MetricsName,
-    server_extra_tags: &Option<Arc<StaticMetricsTags>>,
-    stat_id: &str,
+    common_tags: &StatsdTagGroup,
 ) {
     macro_rules! emit_forbid_stats_u64 {
         ($id:ident, $name:expr) => {
             let new_value = stats.$id;
             if new_value != 0 || snap.$id != 0 {
-                let diff_value =
-                    i64::try_from(new_value.wrapping_sub(snap.$id)).unwrap_or(i64::MAX);
+                let diff_value = new_value.wrapping_sub(snap.$id);
                 client
-                    .count_with_tags($name, diff_value)
-                    .add_server_tags(server, online_value, stat_id)
-                    .add_server_extra_tags(server_extra_tags)
+                    .count_with_tags($name, diff_value, common_tags)
                     .send();
                 snap.$id = new_value;
             }
@@ -218,127 +175,95 @@ fn emit_forbidden_stats(
 }
 
 fn emit_tcp_io_to_statsd(
-    client: &StatsdClient,
+    client: &mut StatsdClient,
     stats: TcpIoSnapshot,
     snap: &mut TcpIoSnapshot,
-    online_value: &str,
-    server: &MetricsName,
-    server_extra_tags: &Option<Arc<StaticMetricsTags>>,
-    stat_id: &str,
+    common_tags: &StatsdTagGroup,
 ) {
-    let new_value = stats.in_bytes;
-    if new_value == 0 && snap.in_bytes == 0 {
+    if stats.in_bytes == 0 && snap.in_bytes == 0 {
         return;
     }
-    let diff_value = i64::try_from(new_value.wrapping_sub(snap.in_bytes)).unwrap_or(i64::MAX);
-    client
-        .count_with_tags(METRIC_NAME_SERVER_IO_IN_BYTES, diff_value)
-        .add_server_tags(server, online_value, stat_id)
-        .add_server_extra_tags(server_extra_tags)
-        .with_tag(TAG_KEY_TRANSPORT, TRANSPORT_TYPE_TCP)
-        .send();
-    snap.in_bytes = new_value;
 
-    let new_value = stats.out_bytes;
-    let diff_value = i64::try_from(new_value.wrapping_sub(snap.out_bytes)).unwrap_or(i64::MAX);
-    client
-        .count_with_tags(METRIC_NAME_SERVER_IO_OUT_BYTES, diff_value)
-        .add_server_tags(server, online_value, stat_id)
-        .add_server_extra_tags(server_extra_tags)
-        .with_tag(TAG_KEY_TRANSPORT, TRANSPORT_TYPE_TCP)
-        .send();
-    snap.out_bytes = new_value;
+    macro_rules! emit_field {
+        ($field:ident, $name:expr) => {
+            let new_value = stats.$field;
+            let diff_value = new_value.wrapping_sub(snap.$field);
+            client
+                .count_with_tags($name, diff_value, common_tags)
+                .with_tag(TAG_KEY_TRANSPORT, TRANSPORT_TYPE_TCP)
+                .send();
+            snap.$field = new_value;
+        };
+    }
+
+    emit_field!(in_bytes, METRIC_NAME_SERVER_IO_IN_BYTES);
+    emit_field!(out_bytes, METRIC_NAME_SERVER_IO_OUT_BYTES);
 }
 
 fn emit_udp_io_to_statsd(
-    client: &StatsdClient,
+    client: &mut StatsdClient,
     stats: UdpIoSnapshot,
     snap: &mut UdpIoSnapshot,
-    online_value: &str,
-    server: &MetricsName,
-    server_extra_tags: &Option<Arc<StaticMetricsTags>>,
-    stat_id: &str,
+    common_tags: &StatsdTagGroup,
 ) {
-    let new_value = stats.in_packets;
-    if new_value == 0 && snap.in_packets == 0 {
+    if stats.in_packets == 0 && snap.in_packets == 0 {
         return;
     }
-    let diff_value = i64::try_from(new_value.wrapping_sub(snap.in_packets)).unwrap_or(i64::MAX);
-    client
-        .count_with_tags(METRIC_NAME_SERVER_IO_IN_PACKETS, diff_value)
-        .add_server_tags(server, online_value, stat_id)
-        .add_server_extra_tags(server_extra_tags)
-        .with_tag(TAG_KEY_TRANSPORT, TRANSPORT_TYPE_UDP)
-        .send();
-    snap.in_packets = new_value;
 
-    let new_value = stats.in_bytes;
-    let diff_value = i64::try_from(new_value.wrapping_sub(snap.in_bytes)).unwrap_or(i64::MAX);
-    client
-        .count_with_tags(METRIC_NAME_SERVER_IO_IN_BYTES, diff_value)
-        .add_server_tags(server, online_value, stat_id)
-        .add_server_extra_tags(server_extra_tags)
-        .with_tag(TAG_KEY_TRANSPORT, TRANSPORT_TYPE_UDP)
-        .send();
-    snap.in_bytes = new_value;
+    macro_rules! emit_field {
+        ($field:ident, $name:expr) => {
+            let new_value = stats.$field;
+            let diff_value = new_value.wrapping_sub(snap.$field);
+            client
+                .count_with_tags($name, diff_value, common_tags)
+                .with_tag(TAG_KEY_TRANSPORT, TRANSPORT_TYPE_UDP)
+                .send();
+            snap.$field = new_value;
+        };
+    }
 
-    let new_value = stats.out_packets;
-    let diff_value = i64::try_from(new_value.wrapping_sub(snap.out_packets)).unwrap_or(i64::MAX);
-    client
-        .count_with_tags(METRIC_NAME_SERVER_IO_OUT_PACKETS, diff_value)
-        .add_server_tags(server, online_value, stat_id)
-        .add_server_extra_tags(server_extra_tags)
-        .with_tag(TAG_KEY_TRANSPORT, TRANSPORT_TYPE_UDP)
-        .send();
-    snap.out_packets = new_value;
-
-    let new_value = stats.out_bytes;
-    let diff_value = i64::try_from(new_value.wrapping_sub(snap.out_bytes)).unwrap_or(i64::MAX);
-    client
-        .count_with_tags(METRIC_NAME_SERVER_IO_OUT_BYTES, diff_value)
-        .add_server_tags(server, online_value, stat_id)
-        .add_server_extra_tags(server_extra_tags)
-        .with_tag(TAG_KEY_TRANSPORT, TRANSPORT_TYPE_UDP)
-        .send();
-    snap.out_bytes = new_value;
+    emit_field!(in_packets, METRIC_NAME_SERVER_IO_IN_PACKETS);
+    emit_field!(in_bytes, METRIC_NAME_SERVER_IO_IN_BYTES);
+    emit_field!(out_packets, METRIC_NAME_SERVER_IO_OUT_PACKETS);
+    emit_field!(out_bytes, METRIC_NAME_SERVER_IO_OUT_BYTES);
 }
 
 fn emit_untrusted_stats(
-    client: &StatsdClient,
+    client: &mut StatsdClient,
     stats: UntrustedTaskStatsSnapshot,
     snap: &mut UntrustedTaskStatsSnapshot,
-    online_value: &str,
-    server: &MetricsName,
-    server_extra_tags: &Option<Arc<StaticMetricsTags>>,
-    stat_id: &str,
+    common_tags: &StatsdTagGroup,
 ) {
     let new_value = stats.task_total;
     if new_value == 0 && snap.task_total == 0 {
         return;
     }
-    let diff_value = i64::try_from(new_value.wrapping_sub(snap.task_total)).unwrap_or(i64::MAX);
+    let diff_value = new_value.wrapping_sub(snap.task_total);
     client
-        .count_with_tags(METRIC_NAME_SERVER_UNTRUSTED_TASK_TOTAL, diff_value)
-        .add_server_tags(server, online_value, stat_id)
-        .add_server_extra_tags(server_extra_tags)
+        .count_with_tags(
+            METRIC_NAME_SERVER_UNTRUSTED_TASK_TOTAL,
+            diff_value,
+            common_tags,
+        )
         .send();
     snap.task_total = new_value;
 
     client
         .gauge_with_tags(
             METRIC_NAME_SERVER_UNTRUSTED_TASK_ALIVE,
-            stats.task_alive as f64,
+            stats.task_alive,
+            common_tags,
         )
-        .add_server_tags(server, online_value, stat_id)
-        .add_server_extra_tags(server_extra_tags)
         .send();
 
     let new_value = stats.in_bytes;
-    let diff_value = i64::try_from(new_value.wrapping_sub(snap.in_bytes)).unwrap_or(i64::MAX);
+    let diff_value = new_value.wrapping_sub(snap.in_bytes);
     client
-        .count_with_tags(METRIC_NAME_SERVER_IO_UNTRUSTED_IN_BYTES, diff_value)
-        .add_server_tags(server, online_value, stat_id)
-        .add_server_extra_tags(server_extra_tags)
+        .count_with_tags(
+            METRIC_NAME_SERVER_IO_UNTRUSTED_IN_BYTES,
+            diff_value,
+            common_tags,
+        )
         .with_tag(TAG_KEY_TRANSPORT, TRANSPORT_TYPE_TCP)
         .send();
     snap.in_bytes = new_value;

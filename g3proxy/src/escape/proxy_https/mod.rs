@@ -80,7 +80,7 @@ impl ProxyHttpsEscaper {
         }
         let proxy_nodes = nodes_builder
             .build()
-            .map_err(|e| anyhow!("failed to build proxy_addr selector: {e:?}"))?;
+            .ok_or_else(|| anyhow!("no next proxy node set"))?;
 
         let tls_config = config
             .tls_config
@@ -109,13 +109,9 @@ impl ProxyHttpsEscaper {
         Ok(Arc::new(escaper))
     }
 
-    pub(super) fn prepare_initial(config: AnyEscaperConfig) -> anyhow::Result<ArcEscaper> {
-        if let AnyEscaperConfig::ProxyHttps(config) = config {
-            let stats = Arc::new(ProxyHttpsEscaperStats::new(config.name()));
-            ProxyHttpsEscaper::new_obj(*config, stats)
-        } else {
-            Err(anyhow!("invalid escaper config type"))
-        }
+    pub(super) fn prepare_initial(config: ProxyHttpsEscaperConfig) -> anyhow::Result<ArcEscaper> {
+        let stats = Arc::new(ProxyHttpsEscaperStats::new(config.name()));
+        ProxyHttpsEscaper::new_obj(config, stats)
     }
 
     fn prepare_reload(
@@ -157,7 +153,7 @@ impl ProxyHttpsEscaper {
     ) -> Vec<Arc<UserUpstreamTrafficStats>> {
         task_notes
             .user_ctx()
-            .map(|ctx| ctx.fetch_upstream_traffic_stats(self.name(), self.stats.extra_tags()))
+            .map(|ctx| ctx.fetch_upstream_traffic_stats(self.name(), self.stats.share_extra_tags()))
             .unwrap_or_default()
     }
 }

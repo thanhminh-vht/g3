@@ -43,8 +43,7 @@ pub(super) struct TlsStreamTask {
 
 impl TlsStreamTask {
     pub(super) fn new(ctx: CommonTaskContext, upstream: &UpstreamAddr) -> Self {
-        let task_notes =
-            ServerTaskNotes::new(ctx.worker_id, ctx.cc_info.clone(), None, Duration::ZERO);
+        let task_notes = ServerTaskNotes::new(ctx.cc_info.clone(), None, Duration::ZERO);
         TlsStreamTask {
             ctx,
             tcp_notes: TcpConnectTaskNotes::new(upstream.clone()),
@@ -96,7 +95,7 @@ impl TlsStreamTask {
         // set client side socket options
         self.ctx
             .cc_info
-            .sock_set_raw_opts(&self.ctx.server_config.tcp_misc_opts, true)
+            .tcp_sock_set_raw_opts(&self.ctx.server_config.tcp_misc_opts, true)
             .map_err(|_| {
                 ServerTaskError::InternalServerError("failed to set client socket options")
             })?;

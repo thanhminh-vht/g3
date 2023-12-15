@@ -29,9 +29,14 @@ use g3_io_ext::LimitedCopyConfig;
 use g3_types::metrics::MetricsName;
 use g3_yaml::{HybridParser, YamlDocPosition};
 
+use crate::audit::AuditHandle;
+use crate::auth::UserGroup;
+
 pub(crate) mod dummy_close;
 pub(crate) mod intelli_proxy;
 pub(crate) mod native_tls_port;
+#[cfg(feature = "quic")]
+pub(crate) mod plain_quic_port;
 pub(crate) mod plain_tcp_port;
 pub(crate) mod plain_tls_port;
 
@@ -43,7 +48,6 @@ pub(crate) mod tcp_stream;
 pub(crate) mod tls_stream;
 
 mod registry;
-
 pub(crate) use registry::clear;
 
 const CONFIG_KEY_SERVER_TYPE: &str = "type";
@@ -95,6 +99,26 @@ pub(crate) trait ServerConfig {
     fn task_max_idle_count(&self) -> i32 {
         1
     }
+
+    fn get_user_group(&self) -> Option<Arc<UserGroup>> {
+        if self.user_group().is_empty() {
+            None
+        } else {
+            Some(crate::auth::get_or_insert_default(self.user_group()))
+        }
+    }
+
+    fn get_audit_handle(&self) -> anyhow::Result<Option<Arc<AuditHandle>>> {
+        if self.auditor().is_empty() {
+            Ok(None)
+        } else {
+            let auditor = crate::audit::get_or_insert_default(self.auditor());
+            let handle = auditor
+                .build_handle()
+                .context("failed to build audit handle")?;
+            Ok(Some(handle))
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -103,6 +127,8 @@ pub(crate) enum AnyServerConfig {
     PlainTcpPort(plain_tcp_port::PlainTcpPortConfig),
     PlainTlsPort(plain_tls_port::PlainTlsPortConfig),
     NativeTlsPort(native_tls_port::NativeTlsPortConfig),
+    #[cfg(feature = "quic")]
+    PlainQuicPort(plain_quic_port::PlainQuicPortConfig),
     IntelliProxy(intelli_proxy::IntelliProxyConfig),
     TcpStream(Box<tcp_stream::TcpStreamServerConfig>),
     TlsStream(Box<tls_stream::TlsStreamServerConfig>),
@@ -120,6 +146,8 @@ macro_rules! impl_transparent0 {
                 AnyServerConfig::PlainTcpPort(s) => s.$f(),
                 AnyServerConfig::PlainTlsPort(s) => s.$f(),
                 AnyServerConfig::NativeTlsPort(s) => s.$f(),
+                #[cfg(feature = "quic")]
+                AnyServerConfig::PlainQuicPort(s) => s.$f(),
                 AnyServerConfig::IntelliProxy(s) => s.$f(),
                 AnyServerConfig::TcpStream(s) => s.$f(),
                 AnyServerConfig::TlsStream(s) => s.$f(),
@@ -140,6 +168,8 @@ macro_rules! impl_transparent1 {
                 AnyServerConfig::PlainTcpPort(s) => s.$f(p),
                 AnyServerConfig::PlainTlsPort(s) => s.$f(p),
                 AnyServerConfig::NativeTlsPort(s) => s.$f(p),
+                #[cfg(feature = "quic")]
+                AnyServerConfig::PlainQuicPort(s) => s.$f(p),
                 AnyServerConfig::IntelliProxy(s) => s.$f(p),
                 AnyServerConfig::TcpStream(s) => s.$f(p),
                 AnyServerConfig::TlsStream(s) => s.$f(p),
@@ -211,6 +241,12 @@ fn load_server(
             let server = native_tls_port::NativeTlsPortConfig::parse(map, position)
                 .context("failed to load this NativeTlsPort server")?;
             Ok(AnyServerConfig::NativeTlsPort(server))
+        }
+        #[cfg(feature = "quic")]
+        "plain_quic_port" | "plainquicport" | "plain_quic" | "plainquic" => {
+            let server = plain_quic_port::PlainQuicPortConfig::parse(map, position)
+                .context("failed to load this PlainQuicPort server")?;
+            Ok(AnyServerConfig::PlainQuicPort(server))
         }
         "intelli_proxy" | "intelliproxy" | "ppdp_tcp_port" | "ppdptcpport" | "ppdp_tcp"
         | "ppdptcp" => {

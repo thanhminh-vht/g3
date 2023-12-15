@@ -20,13 +20,13 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
-use cadence::{Gauged, StatsdClient};
 use hdrhistogram::Histogram;
 use tokio::signal::unix::SignalKind;
 use tokio::sync::{mpsc, Barrier, Semaphore};
 use tokio::time::{Instant, MissedTickBehavior};
 
 use g3_signal::{ActionSignal, SigResult};
+use g3_statsd_client::StatsdClient;
 
 use super::ProcArgs;
 
@@ -38,70 +38,54 @@ use proxy_protocol::{AppendProxyProtocolArgs, ProxyProtocolArgs};
 mod openssl;
 use self::openssl::{AppendOpensslArgs, OpensslTlsClientArgs};
 
+#[cfg(feature = "rustls")]
 mod rustls;
+#[cfg(feature = "rustls")]
 use self::rustls::{AppendRustlsArgs, RustlsTlsClientArgs};
 
 mod http;
 
-pub mod dns;
 pub mod h1;
 pub mod h2;
-pub mod h3;
 pub mod keyless;
 pub mod ssl;
+
+#[cfg_attr(feature = "hickory", path = "dns/mod.rs")]
+#[cfg_attr(not(feature = "hickory"), path = "no_dns.rs")]
+pub mod dns;
+
+#[cfg_attr(feature = "quic", path = "h3/mod.rs")]
+#[cfg_attr(not(feature = "quic"), path = "no_h3.rs")]
+pub mod h3;
 
 const QUANTILE: &str = "quantile";
 
 trait BenchHistogram {
     fn refresh(&mut self);
-    fn emit(&self, client: &StatsdClient);
+    fn emit(&self, client: &mut StatsdClient);
 
-    fn emit_histogram(&self, client: &StatsdClient, histogram: &Histogram<u64>, key: &str) {
+    fn emit_histogram(&self, client: &mut StatsdClient, histogram: &Histogram<u64>, key: &str) {
         let min = histogram.min();
-        client
-            .gauge_with_tags(key, min)
-            .with_tag(QUANTILE, "min")
-            .send();
+        client.gauge(key, min).with_tag(QUANTILE, "min").send();
         let max = histogram.max();
-        client
-            .gauge_with_tags(key, max)
-            .with_tag(QUANTILE, "max")
-            .send();
+        client.gauge(key, max).with_tag(QUANTILE, "max").send();
         let mean = histogram.mean();
         client
-            .gauge_with_tags(key, mean)
+            .gauge_float(key, mean)
             .with_tag(QUANTILE, "mean")
             .send();
         let pct50 = histogram.value_at_quantile(0.50);
-        client
-            .gauge_with_tags(key, pct50)
-            .with_tag(QUANTILE, "0.50")
-            .send();
+        client.gauge(key, pct50).with_tag(QUANTILE, "0.50").send();
         let pct80 = histogram.value_at_quantile(0.80);
-        client
-            .gauge_with_tags(key, pct80)
-            .with_tag(QUANTILE, "0.80")
-            .send();
+        client.gauge(key, pct80).with_tag(QUANTILE, "0.80").send();
         let pct90 = histogram.value_at_quantile(0.90);
-        client
-            .gauge_with_tags(key, pct90)
-            .with_tag(QUANTILE, "0.90")
-            .send();
+        client.gauge(key, pct90).with_tag(QUANTILE, "0.90").send();
         let pct95 = histogram.value_at_quantile(0.95);
-        client
-            .gauge_with_tags(key, pct95)
-            .with_tag(QUANTILE, "0.95")
-            .send();
+        client.gauge(key, pct95).with_tag(QUANTILE, "0.95").send();
         let pct98 = histogram.value_at_quantile(0.98);
-        client
-            .gauge_with_tags(key, pct98)
-            .with_tag(QUANTILE, "0.98")
-            .send();
+        client.gauge(key, pct98).with_tag(QUANTILE, "0.98").send();
         let pct99 = histogram.value_at_quantile(0.99);
-        client
-            .gauge_with_tags(key, pct99)
-            .with_tag(QUANTILE, "0.99")
-            .send();
+        client.gauge(key, pct99).with_tag(QUANTILE, "0.99").send();
     }
 
     fn summary(&self);
@@ -164,7 +148,7 @@ trait BenchHistogram {
 }
 
 trait BenchRuntimeStats {
-    fn emit(&self, client: &StatsdClient);
+    fn emit(&self, client: &mut StatsdClient);
     fn summary(&self, total_time: Duration);
 }
 
@@ -312,13 +296,13 @@ where
     };
     // simple runtime stats
     let runtime_stats_handler =
-        if let Some((statsd_client, emit_duration)) = proc_args.new_statsd_client() {
+        if let Some((mut statsd_client, emit_duration)) = proc_args.new_statsd_client() {
             let runtime_stats = target.fetch_runtime_stats();
             let quit_notifier = quit_notifier.clone();
             let handler = std::thread::Builder::new()
                 .name("runtime-stats".to_string())
                 .spawn(move || loop {
-                    runtime_stats.emit(&statsd_client);
+                    runtime_stats.emit(&mut statsd_client);
                     statsd_client.flush_sink();
 
                     if quit_notifier.load(Ordering::Relaxed) {
@@ -336,12 +320,12 @@ where
     let histogram_stats_handler = if let Some(mut histogram) = target.take_histogram() {
         let quit_notifier = quit_notifier.clone();
         let thread_builder = std::thread::Builder::new().name("histogram".to_string());
-        if let Some((statsd_client, emit_duration)) = proc_args.new_statsd_client() {
+        if let Some((mut statsd_client, emit_duration)) = proc_args.new_statsd_client() {
             let handler = thread_builder
                 .spawn(move || {
                     loop {
                         histogram.refresh();
-                        histogram.emit(&statsd_client);
+                        histogram.emit(&mut statsd_client);
 
                         if quit_notifier.load(Ordering::Relaxed) {
                             break;

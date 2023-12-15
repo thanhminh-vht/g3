@@ -81,7 +81,7 @@ impl ProxySocks5Escaper {
         }
         let proxy_nodes = nodes_builder
             .build()
-            .map_err(|e| anyhow!("failed to build proxy_addr selector: {e:?}"))?;
+            .ok_or_else(|| anyhow!("no next proxy node set"))?;
 
         let escape_logger = config.get_escape_logger();
 
@@ -105,13 +105,9 @@ impl ProxySocks5Escaper {
         Ok(Arc::new(escaper))
     }
 
-    pub(super) fn prepare_initial(config: AnyEscaperConfig) -> anyhow::Result<ArcEscaper> {
-        if let AnyEscaperConfig::ProxySocks5(config) = config {
-            let stats = Arc::new(ProxySocks5EscaperStats::new(config.name()));
-            ProxySocks5Escaper::new_obj(config, stats)
-        } else {
-            Err(anyhow!("invalid escaper config type"))
-        }
+    pub(super) fn prepare_initial(config: ProxySocks5EscaperConfig) -> anyhow::Result<ArcEscaper> {
+        let stats = Arc::new(ProxySocks5EscaperStats::new(config.name()));
+        ProxySocks5Escaper::new_obj(config, stats)
     }
 
     fn prepare_reload(
@@ -153,7 +149,7 @@ impl ProxySocks5Escaper {
     ) -> Vec<Arc<UserUpstreamTrafficStats>> {
         task_notes
             .user_ctx()
-            .map(|ctx| ctx.fetch_upstream_traffic_stats(self.name(), self.stats.extra_tags()))
+            .map(|ctx| ctx.fetch_upstream_traffic_stats(self.name(), self.stats.share_extra_tags()))
             .unwrap_or_default()
     }
 }

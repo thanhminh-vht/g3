@@ -17,8 +17,13 @@
 mod listen;
 pub use listen::emit_listen_stats;
 
+mod log;
+pub(crate) use log::{emit_log_drop_stats, emit_log_io_stats, LoggerMetricExt};
+
 mod server;
 pub use server::{ServerMetricExt, TAG_KEY_ONLINE, TAG_KEY_SERVER};
+
+pub mod helper;
 
 pub const TAG_KEY_DAEMON_GROUP: &str = "daemon_group";
 
@@ -42,5 +47,11 @@ impl MetricTransportType {
             MetricTransportType::Tcp => TRANSPORT_TYPE_TCP,
             MetricTransportType::Udp => TRANSPORT_TYPE_UDP,
         }
+    }
+}
+
+impl AsRef<str> for MetricTransportType {
+    fn as_ref(&self) -> &str {
+        self.as_str()
     }
 }

@@ -97,6 +97,10 @@ The following plugins is recommended:
 
   To run llvm-tools installed via rustup.
 
+- cargo-cache
+
+  To clean cargo caches.
+
 # IDE
 
 ## JetBrains
@@ -115,7 +119,7 @@ There is an official [rust plugin](https://plugins.jetbrains.com/plugin/8182-rus
 It is recommended to use Debian based distro as your development platform.
 
 ```shell
-apt-get install gcc pkgconf libtool make capnproto
+apt-get install gcc pkgconf make capnproto
 apt-get install curl jq xz-utils tar
 apt-get install libssl-dev libc-ares-dev
 # install lua5.4 or any other versions available on your system
@@ -140,7 +144,7 @@ dnf install epel-release
 dnf update
 
 #
-dnf install gcc pkgconf libtool make capnproto
+dnf install gcc pkgconf make capnproto
 dnf install curl jq xz tar
 dnf install openssl-devel c-ares-devel lua-devel
 dnf install python3-devel
@@ -154,7 +158,6 @@ dnf install rpmdevtools rpm-build
 ```shell
 brew install pkgconf capnp
 brew install openssl c-ares
-brew install autoconf automake libtool
 brew install lua
 # install python, or you can use the one provided by XCode
 brew install python
@@ -174,7 +177,7 @@ pkg install python3
 ### NetBSD
 
 ```shell
-pkgin install pkgconf libtool autoconf automake capnproto
+pkgin install pkgconf capnproto
 pkgin install openssl libcares
 # install lua5.4 or any other versions available on your system, and create a pkgconfig link
 pkgin install lua54
@@ -189,10 +192,10 @@ ln -s /usr/pkg/bin/python3.10 /usr/pkg/bin/python3
 
 For *g3proxy*:
 ```text
-openssl
-c-ares
+openssl >= 3.0.0
+c-ares >= 1.12.0
 lua
-python3
+python3 >= 3.7
 ```
 
 ## Development Tools
@@ -205,8 +208,7 @@ pkg-config
 
 If the c-ares version in the OS repo is too old, the following tools is also required:
 ```text
-libtool
-make
+cmake
 ```
 
 ## Rpc Code Generator

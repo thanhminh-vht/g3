@@ -15,6 +15,7 @@
  */
 
 mod parse;
+mod serialize;
 
 pub mod reqmod;
 
@@ -24,5 +25,6 @@ mod options;
 pub use options::IcapServiceOptions;
 
 mod service;
+
 use service::{IcapClientConnection, IcapClientReader, IcapClientWriter};
 pub use service::{IcapConnectionPoolConfig, IcapMethod, IcapServiceClient, IcapServiceConfig};

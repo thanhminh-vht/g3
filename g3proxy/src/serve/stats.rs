@@ -27,7 +27,8 @@ use crate::stat::types::UntrustedTaskStatsSnapshot;
 pub(crate) trait ServerStats {
     fn name(&self) -> &MetricsName;
     fn stat_id(&self) -> StatId;
-    fn extra_tags(&self) -> &Arc<ArcSwapOption<StaticMetricsTags>>;
+    fn load_extra_tags(&self) -> Option<Arc<StaticMetricsTags>>;
+    fn share_extra_tags(&self) -> &Arc<ArcSwapOption<StaticMetricsTags>>;
 
     fn is_online(&self) -> bool;
 

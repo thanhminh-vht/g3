@@ -14,18 +14,21 @@
  * limitations under the License.
  */
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::io;
+use std::os::unix::net::UnixDatagram;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone)]
-pub enum StatsdBackend {
-    Udp(SocketAddr, Option<IpAddr>),
-    Unix(PathBuf),
+pub(super) struct UnixMetricsSink {
+    path: PathBuf,
+    socket: UnixDatagram,
 }
 
-impl Default for StatsdBackend {
-    fn default() -> Self {
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), cadence::DEFAULT_PORT);
-        StatsdBackend::Udp(addr, None)
+impl UnixMetricsSink {
+    pub(super) fn new(path: PathBuf, socket: UnixDatagram) -> Self {
+        UnixMetricsSink { path, socket }
+    }
+
+    pub(super) fn send_msg(&self, msg: &[u8]) -> io::Result<usize> {
+        self.socket.send_to(msg, &self.path)
     }
 }

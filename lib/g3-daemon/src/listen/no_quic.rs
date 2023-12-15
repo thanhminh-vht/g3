@@ -14,10 +14,19 @@
  * limitations under the License.
  */
 
-mod backend;
-mod config;
-mod error;
+use std::sync::Arc;
 
-pub use backend::StatsdBackend;
-pub use config::StatsdClientConfig;
-pub use error::StatsdClientBuildError;
+use async_trait::async_trait;
+
+use crate::server::BaseServer;
+
+#[async_trait]
+pub trait AcceptQuicServer: BaseServer {
+    fn get_reloaded(&self) -> ArcAcceptQuicServer;
+}
+
+pub type ArcAcceptQuicServer = Arc<dyn AcceptQuicServer + Send + Sync>;
+
+pub trait ListenQuicConf {}
+
+pub struct ListenQuicRuntime {}

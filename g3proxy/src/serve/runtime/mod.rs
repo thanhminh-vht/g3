@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-mod auxiliary_context;
-mod auxiliary_tcp_port;
-mod ordinary_tcp_port;
+mod listen_tcp;
+pub(crate) use listen_tcp::ListenTcpRuntime;
 
-pub(crate) use auxiliary_context::AuxiliaryRunContext;
-pub(crate) use auxiliary_tcp_port::{AuxiliaryServerConfig, AuxiliaryTcpPortRuntime};
-pub(crate) use ordinary_tcp_port::OrdinaryTcpServerRuntime;
+#[cfg(feature = "quic")]
+mod listen_quic;
+#[cfg(feature = "quic")]
+pub(crate) use listen_quic::ListenQuicRuntime;

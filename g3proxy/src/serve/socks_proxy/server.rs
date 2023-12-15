@@ -18,7 +18,10 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::anyhow;
+use arc_swap::{ArcSwap, ArcSwapOption};
 use async_trait::async_trait;
+#[cfg(feature = "quic")]
+use quinn::Connection;
 use slog::Logger;
 use tokio::net::TcpStream;
 use tokio::sync::broadcast;
@@ -26,18 +29,21 @@ use tokio_openssl::SslStream;
 use tokio_rustls::server::TlsStream;
 
 use g3_daemon::listen::ListenStats;
-use g3_daemon::server::ClientConnectionInfo;
+use g3_daemon::server::{ClientConnectionInfo, ServerReloadCommand};
 use g3_types::acl::{AclAction, AclNetworkRule};
 use g3_types::acl_set::AclDstHostRuleSet;
 use g3_types::metrics::MetricsName;
 
 use super::task::{CommonTaskContext, SocksProxyNegotiationTask};
 use super::SocksProxyServerStats;
+use crate::audit::AuditHandle;
+use crate::auth::UserGroup;
 use crate::config::server::socks_proxy::SocksProxyServerConfig;
 use crate::config::server::{AnyServerConfig, ServerConfig};
+use crate::escape::ArcEscaper;
 use crate::serve::{
-    ArcServer, ArcServerStats, OrdinaryTcpServerRuntime, Server, ServerInternal, ServerQuitPolicy,
-    ServerReloadCommand, ServerRunContext, ServerStats,
+    ArcServer, ArcServerStats, ListenTcpRuntime, Server, ServerInternal, ServerQuitPolicy,
+    ServerStats,
 };
 
 pub(crate) struct SocksProxyServer {
@@ -49,6 +55,9 @@ pub(crate) struct SocksProxyServer {
     reload_sender: broadcast::Sender<ServerReloadCommand>,
     task_logger: Logger,
 
+    escaper: ArcSwap<ArcEscaper>,
+    user_group: ArcSwapOption<UserGroup>,
+    audit_handle: ArcSwapOption<AuditHandle>,
     quit_policy: Arc<ServerQuitPolicy>,
     reload_version: usize,
 }
@@ -76,6 +85,10 @@ impl SocksProxyServer {
 
         server_stats.set_extra_tags(config.extra_metrics_tags.clone());
 
+        let escaper = Arc::new(crate::escape::get_or_insert_default(config.escaper()));
+        let user_group = config.get_user_group();
+        let audit_handle = config.get_audit_handle()?;
+
         let server = SocksProxyServer {
             config,
             server_stats,
@@ -84,6 +97,9 @@ impl SocksProxyServer {
             dst_host_filter,
             reload_sender,
             task_logger,
+            escaper: ArcSwap::new(escaper),
+            user_group: ArcSwapOption::new(user_group),
+            audit_handle: ArcSwapOption::new(audit_handle),
             quit_policy: Arc::new(ServerQuitPolicy::default()),
             reload_version: version,
         };
@@ -91,17 +107,13 @@ impl SocksProxyServer {
         Ok(server)
     }
 
-    pub(crate) fn prepare_initial(config: AnyServerConfig) -> anyhow::Result<ArcServer> {
-        if let AnyServerConfig::SocksProxy(config) = config {
-            let config = Arc::new(*config);
-            let server_stats = Arc::new(SocksProxyServerStats::new(config.name()));
-            let listen_stats = Arc::new(ListenStats::new(config.name()));
+    pub(crate) fn prepare_initial(config: SocksProxyServerConfig) -> anyhow::Result<ArcServer> {
+        let config = Arc::new(config);
+        let server_stats = Arc::new(SocksProxyServerStats::new(config.name()));
+        let listen_stats = Arc::new(ListenStats::new(config.name()));
 
-            let server = SocksProxyServer::new(config, server_stats, listen_stats, 1)?;
-            Ok(Arc::new(server))
-        } else {
-            Err(anyhow!("invalid config type for SocksProxy server"))
-        }
+        let server = SocksProxyServer::new(config, server_stats, listen_stats, 1)?;
+        Ok(Arc::new(server))
     }
 
     fn prepare_reload(&self, config: AnyServerConfig) -> anyhow::Result<SocksProxyServer> {
@@ -139,25 +151,19 @@ impl SocksProxyServer {
         false
     }
 
-    async fn run_task(
-        &self,
-        stream: TcpStream,
-        cc_info: ClientConnectionInfo,
-        run_ctx: ServerRunContext,
-    ) {
+    async fn run_task(&self, stream: TcpStream, cc_info: ClientConnectionInfo) {
         let ctx = CommonTaskContext {
             server_config: Arc::clone(&self.config),
             server_stats: Arc::clone(&self.server_stats),
             server_quit_policy: Arc::clone(&self.quit_policy),
-            escaper: run_ctx.escaper,
-            audit_handle: run_ctx.audit_handle,
+            escaper: self.escaper.load().as_ref().clone(),
+            audit_handle: self.audit_handle.load_full(),
             ingress_net_filter: self.ingress_net_filter.clone(),
             dst_host_filter: self.dst_host_filter.clone(),
             cc_info,
             task_logger: self.task_logger.clone(),
-            worker_id: run_ctx.worker_id,
         };
-        SocksProxyNegotiationTask::new(ctx, run_ctx.user_group)
+        SocksProxyNegotiationTask::new(ctx, self.user_group.load_full())
             .into_running(stream)
             .await;
     }
@@ -172,8 +178,8 @@ impl ServerInternal for SocksProxyServer {
         Ok(())
     }
 
-    fn _get_reload_notifier(&self) -> broadcast::Receiver<ServerReloadCommand> {
-        self.reload_sender.subscribe()
+    fn _depend_on_server(&self, _name: &MetricsName) -> bool {
+        false
     }
 
     fn _reload_config_notify_runtime(&self) {
@@ -181,18 +187,21 @@ impl ServerInternal for SocksProxyServer {
         let _ = self.reload_sender.send(cmd);
     }
 
-    fn _reload_escaper_notify_runtime(&self) {
-        let _ = self.reload_sender.send(ServerReloadCommand::ReloadEscaper);
+    fn _update_next_servers_in_place(&self) {}
+
+    fn _update_escaper_in_place(&self) {
+        let escaper = crate::escape::get_or_insert_default(self.config.escaper());
+        self.escaper.store(Arc::new(escaper));
     }
 
-    fn _reload_user_group_notify_runtime(&self) {
-        let _ = self
-            .reload_sender
-            .send(ServerReloadCommand::ReloadUserGroup);
+    fn _update_user_group_in_place(&self) {
+        self.user_group.store(self.config.get_user_group());
     }
 
-    fn _reload_auditor_notify_runtime(&self) {
-        let _ = self.reload_sender.send(ServerReloadCommand::ReloadAuditor);
+    fn _update_audit_handle_in_place(&self) -> anyhow::Result<()> {
+        let audit_handle = self.config.get_audit_handle()?;
+        self.audit_handle.store(audit_handle);
+        Ok(())
     }
 
     fn _reload_with_old_notifier(&self, config: AnyServerConfig) -> anyhow::Result<ArcServer> {
@@ -210,7 +219,7 @@ impl ServerInternal for SocksProxyServer {
         let Some(listen_config) = &self.config.listen else {
             return Ok(());
         };
-        let runtime = OrdinaryTcpServerRuntime::new(server, &*self.config);
+        let runtime = ListenTcpRuntime::new(server, &*self.config);
         runtime
             .run_all_instances(
                 listen_config,
@@ -267,38 +276,26 @@ impl Server for SocksProxyServer {
         &self.quit_policy
     }
 
-    async fn run_tcp_task(
-        &self,
-        stream: TcpStream,
-        cc_info: ClientConnectionInfo,
-        ctx: ServerRunContext,
-    ) {
+    async fn run_tcp_task(&self, stream: TcpStream, cc_info: ClientConnectionInfo) {
         let client_addr = cc_info.client_addr();
         self.server_stats.add_conn(client_addr);
         if self.drop_early(client_addr) {
             return;
         }
 
-        self.run_task(stream, cc_info, ctx).await
+        self.run_task(stream, cc_info).await
     }
 
-    async fn run_rustls_task(
-        &self,
-        _stream: TlsStream<TcpStream>,
-        cc_info: ClientConnectionInfo,
-        _ctx: ServerRunContext,
-    ) {
+    async fn run_rustls_task(&self, _stream: TlsStream<TcpStream>, cc_info: ClientConnectionInfo) {
         self.server_stats.add_conn(cc_info.client_addr());
         self.listen_stats.add_dropped();
     }
 
-    async fn run_openssl_task(
-        &self,
-        _stream: SslStream<TcpStream>,
-        cc_info: ClientConnectionInfo,
-        _ctx: ServerRunContext,
-    ) {
+    async fn run_openssl_task(&self, _stream: SslStream<TcpStream>, cc_info: ClientConnectionInfo) {
         self.server_stats.add_conn(cc_info.client_addr());
         self.listen_stats.add_dropped();
     }
+
+    #[cfg(feature = "quic")]
+    async fn run_quic_task(&self, _connection: Connection, _cc_info: ClientConnectionInfo) {}
 }

@@ -25,7 +25,7 @@ use tokio::net::TcpStream;
 use tokio::sync::broadcast;
 
 use g3_daemon::listen::ListenStats;
-use g3_daemon::server::ClientConnectionInfo;
+use g3_daemon::server::{ClientConnectionInfo, ServerReloadCommand};
 use g3_types::acl::{AclAction, AclNetworkRule};
 use g3_types::metrics::MetricsName;
 use g3_types::route::HostMatch;
@@ -34,15 +34,15 @@ use super::{CommonTaskContext, RustlsAcceptTask, RustlsHost, RustlsProxyServerSt
 use crate::config::server::rustls_proxy::RustlsProxyServerConfig;
 use crate::config::server::{AnyServerConfig, ServerConfig};
 use crate::serve::{
-    ArcServer, ArcServerStats, OrdinaryTcpServerRuntime, Server, ServerInternal, ServerQuitPolicy,
-    ServerReloadCommand, ServerRunContext, ServerStats,
+    ArcServer, ArcServerStats, ListenTcpRuntime, Server, ServerInternal, ServerQuitPolicy,
+    ServerStats,
 };
 
 pub(crate) struct RustlsProxyServer {
     config: Arc<RustlsProxyServerConfig>,
     server_stats: Arc<RustlsProxyServerStats>,
     listen_stats: Arc<ListenStats>,
-    ingress_net_filter: Option<Arc<AclNetworkRule>>,
+    ingress_net_filter: Option<AclNetworkRule>,
     reload_sender: broadcast::Sender<ServerReloadCommand>,
     task_logger: Logger,
     hosts: HostMatch<Arc<RustlsHost>>,
@@ -64,7 +64,7 @@ impl RustlsProxyServer {
         let ingress_net_filter = config
             .ingress_net_filter
             .as_ref()
-            .map(|builder| Arc::new(builder.build()));
+            .map(|builder| builder.build());
 
         let task_logger = config.get_task_logger();
 
@@ -84,19 +84,15 @@ impl RustlsProxyServer {
         }
     }
 
-    pub(crate) fn prepare_initial(config: AnyServerConfig) -> anyhow::Result<ArcServer> {
-        if let AnyServerConfig::RustlsProxy(config) = config {
-            let config = Arc::new(config);
-            let server_stats = Arc::new(RustlsProxyServerStats::new(config.name()));
-            let listen_stats = Arc::new(ListenStats::new(config.name()));
+    pub(crate) fn prepare_initial(config: RustlsProxyServerConfig) -> anyhow::Result<ArcServer> {
+        let config = Arc::new(config);
+        let server_stats = Arc::new(RustlsProxyServerStats::new(config.name()));
+        let listen_stats = Arc::new(ListenStats::new(config.name()));
 
-            let hosts = (&config.hosts).try_into()?;
+        let hosts = (&config.hosts).try_into()?;
 
-            let server = RustlsProxyServer::new(config, server_stats, listen_stats, hosts, 1);
-            Ok(Arc::new(server))
-        } else {
-            Err(anyhow!("invalid config type for DummyClose server"))
-        }
+        let server = RustlsProxyServer::new(config, server_stats, listen_stats, hosts, 1);
+        Ok(Arc::new(server))
     }
 
     fn prepare_reload(&self, config: AnyServerConfig) -> anyhow::Result<RustlsProxyServer> {
@@ -152,12 +148,7 @@ impl RustlsProxyServer {
         false
     }
 
-    async fn run_task(
-        &self,
-        stream: TcpStream,
-        cc_info: ClientConnectionInfo,
-        _run_ctx: ServerRunContext,
-    ) {
+    async fn run_task(&self, stream: TcpStream, cc_info: ClientConnectionInfo) {
         let ctx = CommonTaskContext {
             server_config: Arc::clone(&self.config),
             server_stats: Arc::clone(&self.server_stats),
@@ -186,14 +177,16 @@ impl ServerInternal for RustlsProxyServer {
         Ok(())
     }
 
-    fn _get_reload_notifier(&self) -> broadcast::Receiver<ServerReloadCommand> {
-        self.reload_sender.subscribe()
+    fn _depend_on_server(&self, _name: &MetricsName) -> bool {
+        false
     }
 
     fn _reload_config_notify_runtime(&self) {
         let cmd = ServerReloadCommand::ReloadVersion(self.reload_version);
         let _ = self.reload_sender.send(cmd);
     }
+
+    fn _update_next_servers_in_place(&self) {}
 
     fn _reload_with_old_notifier(&self, config: AnyServerConfig) -> anyhow::Result<ArcServer> {
         let mut server = self.prepare_reload(config)?;
@@ -207,7 +200,7 @@ impl ServerInternal for RustlsProxyServer {
     }
 
     fn _start_runtime(&self, server: &ArcServer) -> anyhow::Result<()> {
-        let runtime = OrdinaryTcpServerRuntime::new(server, &*self.config);
+        let runtime = ListenTcpRuntime::new(server, &*self.config);
         runtime
             .run_all_instances(
                 &self.config.listen,
@@ -250,18 +243,13 @@ impl Server for RustlsProxyServer {
         &self.quit_policy
     }
 
-    async fn run_tcp_task(
-        &self,
-        stream: TcpStream,
-        cc_info: ClientConnectionInfo,
-        ctx: ServerRunContext,
-    ) {
+    async fn run_tcp_task(&self, stream: TcpStream, cc_info: ClientConnectionInfo) {
         let client_addr = cc_info.client_addr();
         self.server_stats.add_conn(client_addr);
         if self.drop_early(client_addr) {
             return;
         }
 
-        self.run_task(stream, cc_info, ctx).await
+        self.run_task(stream, cc_info).await
     }
 }

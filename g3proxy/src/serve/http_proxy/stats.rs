@@ -97,7 +97,12 @@ impl ServerStats for HttpProxyServerStats {
     }
 
     #[inline]
-    fn extra_tags(&self) -> &Arc<ArcSwapOption<StaticMetricsTags>> {
+    fn load_extra_tags(&self) -> Option<Arc<StaticMetricsTags>> {
+        self.extra_metrics_tags.load_full()
+    }
+
+    #[inline]
+    fn share_extra_tags(&self) -> &Arc<ArcSwapOption<StaticMetricsTags>> {
         &self.extra_metrics_tags
     }
 

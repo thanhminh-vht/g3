@@ -32,6 +32,8 @@ use super::{registry, ArcServer};
 use super::dummy_close::DummyCloseServer;
 use super::intelli_proxy::IntelliProxy;
 use super::native_tls_port::NativeTlsPort;
+#[cfg(feature = "quic")]
+use super::plain_quic_port::PlainQuicPort;
 use super::plain_tcp_port::PlainTcpPort;
 use super::plain_tls_port::PlainTlsPort;
 
@@ -81,7 +83,7 @@ pub async fn spawn_all() -> anyhow::Result<()> {
     for name in &registry::get_names() {
         if !new_names.contains(name) {
             debug!("deleting server {name}");
-            registry::del(name);
+            delete_existed_unlocked(name);
             debug!("server {name} deleted");
         }
     }
@@ -145,6 +147,32 @@ pub(crate) async fn reload(
     reload_old_unlocked(old_config, config)?;
     debug!("server {name} reload OK");
     Ok(())
+}
+
+pub(crate) fn update_dependency_to_server_unlocked(target: &MetricsName, status: &str) {
+    let mut servers = Vec::<ArcServer>::new();
+
+    registry::foreach_online(|_name, server| {
+        if server._depend_on_server(target) {
+            servers.push(server.clone());
+        }
+    });
+
+    if servers.is_empty() {
+        return;
+    }
+
+    debug!(
+        "escaper {target} changed({status}), will reload {} server(s)",
+        servers.len()
+    );
+    for server in servers.iter() {
+        debug!(
+            "server {}: will reload next servers as it's using server {target}",
+            server.name()
+        );
+        server._update_next_servers_in_place();
+    }
 }
 
 pub(crate) async fn update_dependency_to_escaper(escaper: &MetricsName, status: &str) {
@@ -232,11 +260,15 @@ fn reload_old_unlocked(old: AnyServerConfig, new: AnyServerConfig) -> anyhow::Re
         }
         ServerConfigDiffAction::ReloadOnlyConfig => {
             debug!("server {name} reload: will only reload config");
-            registry::reload_only_config(name, new)
+            registry::reload_only_config(name, new)?;
+            update_dependency_to_server_unlocked(name, "reloaded");
+            Ok(())
         }
         ServerConfigDiffAction::ReloadAndRespawn => {
             debug!("server {name} reload: will respawn with old stats");
-            registry::reload_and_respawn(name, new)
+            registry::reload_and_respawn(name, new)?;
+            update_dependency_to_server_unlocked(name, "reloaded");
+            Ok(())
         }
         ServerConfigDiffAction::UpdateInPlace(flags) => {
             debug!("server {name} reload: will update the existed in place");
@@ -245,23 +277,31 @@ fn reload_old_unlocked(old: AnyServerConfig, new: AnyServerConfig) -> anyhow::Re
     }
 }
 
+fn delete_existed_unlocked(name: &MetricsName) {
+    registry::del(name);
+    update_dependency_to_server_unlocked(name, "deleted");
+}
+
 // use async fn to allow tokio schedule
 fn spawn_new_unlocked(config: AnyServerConfig) -> anyhow::Result<()> {
     let name = config.name().clone();
     let server = match config {
-        AnyServerConfig::DummyClose(_) => DummyCloseServer::prepare_initial(config)?,
-        AnyServerConfig::PlainTcpPort(_) => PlainTcpPort::prepare_initial(config)?,
-        AnyServerConfig::PlainTlsPort(_) => PlainTlsPort::prepare_initial(config)?,
-        AnyServerConfig::NativeTlsPort(_) => NativeTlsPort::prepare_initial(config)?,
-        AnyServerConfig::IntelliProxy(_) => IntelliProxy::prepare_initial(config)?,
-        AnyServerConfig::TcpStream(_) => TcpStreamServer::prepare_initial(config)?,
-        AnyServerConfig::TlsStream(_) => TlsStreamServer::prepare_initial(config)?,
-        AnyServerConfig::SniProxy(_) => SniProxyServer::prepare_initial(config)?,
-        AnyServerConfig::SocksProxy(_) => SocksProxyServer::prepare_initial(config)?,
-        AnyServerConfig::HttpProxy(_) => HttpProxyServer::prepare_initial(config)?,
-        AnyServerConfig::HttpRProxy(_) => HttpRProxyServer::prepare_initial(config)?,
+        AnyServerConfig::DummyClose(c) => DummyCloseServer::prepare_initial(c)?,
+        AnyServerConfig::PlainTcpPort(c) => PlainTcpPort::prepare_initial(c)?,
+        AnyServerConfig::PlainTlsPort(c) => PlainTlsPort::prepare_initial(c)?,
+        AnyServerConfig::NativeTlsPort(c) => NativeTlsPort::prepare_initial(c)?,
+        #[cfg(feature = "quic")]
+        AnyServerConfig::PlainQuicPort(c) => PlainQuicPort::prepare_initial(c)?,
+        AnyServerConfig::IntelliProxy(c) => IntelliProxy::prepare_initial(c)?,
+        AnyServerConfig::TcpStream(c) => TcpStreamServer::prepare_initial(*c)?,
+        AnyServerConfig::TlsStream(c) => TlsStreamServer::prepare_initial(*c)?,
+        AnyServerConfig::SniProxy(c) => SniProxyServer::prepare_initial(*c)?,
+        AnyServerConfig::SocksProxy(c) => SocksProxyServer::prepare_initial(*c)?,
+        AnyServerConfig::HttpProxy(c) => HttpProxyServer::prepare_initial(*c)?,
+        AnyServerConfig::HttpRProxy(c) => HttpRProxyServer::prepare_initial(*c)?,
     };
-    registry::add(name, server)?;
+    registry::add(name.clone(), server)?;
+    update_dependency_to_server_unlocked(&name, "spawned");
     Ok(())
 }
 

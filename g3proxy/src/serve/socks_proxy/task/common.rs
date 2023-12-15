@@ -41,7 +41,6 @@ pub(crate) struct CommonTaskContext {
     pub(crate) dst_host_filter: Option<Arc<AclDstHostRuleSet>>,
     pub(crate) cc_info: ClientConnectionInfo,
     pub(crate) task_logger: Logger,
-    pub(crate) worker_id: Option<usize>,
 }
 
 impl CommonTaskContext {
@@ -143,7 +142,7 @@ impl CommonTaskContext {
                     udp_bind_ip,
                     port_range,
                     self.server_config.udp_socket_buffer,
-                    &misc_opts,
+                    misc_opts,
                 )
                 .map_err(|_| {
                     ServerTaskError::InternalServerError(
@@ -154,7 +153,7 @@ impl CommonTaskContext {
                 g3_socket::udp::new_std_bind_connect(
                     Some(udp_bind_ip),
                     self.server_config.udp_socket_buffer,
-                    &misc_opts,
+                    misc_opts,
                 )
                 .map_err(|_| {
                     ServerTaskError::InternalServerError(
