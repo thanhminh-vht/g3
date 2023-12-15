@@ -1322,7 +1322,7 @@ dependencies = [
 
 [[package]]
 name = "g3bench"
-version = "0.8.8"
+version = "0.8.8-tlcp1"
 dependencies = [
  "ahash",
  "anyhow",
