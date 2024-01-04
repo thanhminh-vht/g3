@@ -14,18 +14,15 @@
  * limitations under the License.
  */
 
-use std::borrow::Cow;
 use std::net::{IpAddr, SocketAddr};
-use std::pin::Pin;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context};
 use clap::{value_parser, Arg, ArgAction, ArgMatches, Command};
-use openssl::ssl::SslVerifyMode;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio_openssl::SslStream;
 
+use g3_openssl::SslStream;
 use g3_types::collection::{SelectiveVec, WeightedValue};
 use g3_types::net::{OpensslClientConfig, OpensslClientConfigBuilder, UpstreamAddr};
 
@@ -38,6 +35,7 @@ use crate::target::{
 
 const ARG_CONNECTION_POOL: &str = "connection-pool";
 const ARG_TARGET: &str = "target";
+const ARG_NO_TLS: &str = "no-tls";
 const ARG_LOCAL_ADDRESS: &str = "local-address";
 const ARG_CONNECT_TIMEOUT: &str = "connect-timeout";
 const ARG_TIMEOUT: &str = "timeout";
@@ -58,10 +56,14 @@ pub(super) struct KeylessCloudflareArgs {
 }
 
 impl KeylessCloudflareArgs {
-    fn new(global_args: KeylessGlobalArgs, target: UpstreamAddr) -> Self {
-        let tls = OpensslTlsClientArgs {
-            config: Some(OpensslClientConfigBuilder::with_cache_for_one_site()),
-            ..Default::default()
+    fn new(global_args: KeylessGlobalArgs, target: UpstreamAddr, no_tls: bool) -> Self {
+        let tls = if no_tls {
+            OpensslTlsClientArgs::default()
+        } else {
+            OpensslTlsClientArgs {
+                config: Some(OpensslClientConfigBuilder::with_cache_for_one_site()),
+                ..Default::default()
+            }
         };
         KeylessCloudflareArgs {
             global: global_args,
@@ -160,25 +162,9 @@ impl KeylessCloudflareArgs {
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
-        let tls_name = self
-            .tls
-            .tls_name
-            .as_ref()
-            .map(|v| Cow::Borrowed(v.as_str()))
-            .unwrap_or_else(|| self.target.host_str());
-        let mut ssl = tls_client
-            .build_ssl(&tls_name, self.target.port())
-            .context("failed to build ssl context")?;
-        if self.tls.no_verify {
-            ssl.set_verify(SslVerifyMode::NONE);
-        }
-        let mut tls_stream = SslStream::new(ssl, stream)
-            .map_err(|e| anyhow!("tls connect to {tls_name} failed: {e}"))?;
-        Pin::new(&mut tls_stream)
-            .connect()
+        self.tls
+            .connect_target(tls_client, stream, &self.target)
             .await
-            .map_err(|e| anyhow!("tls connect to {tls_name} failed: {e}"))?;
-        Ok(tls_stream)
     }
 }
 
@@ -191,6 +177,13 @@ pub(super) fn add_cloudflare_args(app: Command) -> Command {
             .required(true)
             .num_args(1)
             .value_parser(value_parser!(UpstreamAddr)),
+    )
+    .arg(
+        Arg::new(ARG_NO_TLS)
+            .help("Use no tls")
+            .long(ARG_NO_TLS)
+            .action(ArgAction::SetTrue)
+            .num_args(0),
     )
     .arg(
         Arg::new(ARG_CONNECTION_POOL)
@@ -248,11 +241,12 @@ pub(super) fn parse_cloudflare_args(args: &ArgMatches) -> anyhow::Result<Keyless
     } else {
         return Err(anyhow!("no target set"));
     };
+    let no_tls = args.get_flag(ARG_NO_TLS);
 
     let global_args =
         KeylessGlobalArgs::parse_args(args).context("failed to parse global keyless args")?;
 
-    let mut cf_args = KeylessCloudflareArgs::new(global_args, target);
+    let mut cf_args = KeylessCloudflareArgs::new(global_args, target, no_tls);
 
     if let Some(c) = args.get_one::<usize>(ARG_CONNECTION_POOL) {
         if *c > 0 {

@@ -1,9 +1,9 @@
 [package]
 name = "g3proxy"
-version = "1.7.31-tlcp1"
+version = "1.7.32"
 license.workspace = true
 edition.workspace = true
-rust-version = "1.74.0"
+rust-version = "1.75.0"
 description = "G3 generic proxy"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -26,7 +26,6 @@ tokio-util = { workspace = true, features = ["time"] }
 tokio-rustls.workspace = true
 rustls.workspace = true
 quinn = { workspace = true, optional = true, features = ["tls-rustls", "runtime-tokio"] }
-tokio-openssl.workspace = true
 openssl.workspace = true
 openssl-probe = { workspace = true, optional = true }
 indexmap.workspace = true
@@ -60,6 +59,7 @@ rustc-hash = { workspace = true, optional = true }
 fnv = { workspace = true, optional = true }
 governor = { workspace = true, features = ["std", "jitter"] }
 rmpv.workspace = true
+c-ares-sys = { workspace = true, optional = true } # for DEP_ version check
 mlua = { workspace = true, features = ["send"], optional = true }
 pyo3 = { workspace = true, features = ["auto-initialize"], optional = true }
 g3-compat.workspace = true
@@ -69,9 +69,10 @@ g3-daemon.workspace = true
 g3-signal.workspace = true
 g3-datetime.workspace = true
 g3-statsd-client.workspace = true
+g3-histogram.workspace = true
 g3-slog-types = { workspace = true, features = ["http"] }
-g3-yaml = { workspace = true, features = ["resolve", "rustls", "openssl", "acl-rule", "http", "ftp-client", "proxy", "route", "dpi", "audit"] }
-g3-json = { workspace = true, features = ["acl-rule", "resolve", "http", "rustls", "openssl", "proxy"] }
+g3-yaml = { workspace = true, features = ["resolve", "rustls", "openssl", "acl-rule", "http", "ftp-client", "proxy", "route", "dpi", "audit", "histogram"] }
+g3-json = { workspace = true, features = ["acl-rule", "resolve", "http", "rustls", "openssl", "proxy", "histogram"] }
 g3-msgpack.workspace = true
 g3-io-ext.workspace = true
 g3-resolver.workspace = true
@@ -82,6 +83,7 @@ g3-h2.workspace = true
 g3-socks.workspace = true
 g3-dpi.workspace = true
 g3-tls-cert.workspace = true
+g3-openssl.workspace = true
 g3-icap-client.workspace = true
 g3-geoip = { workspace = true, optional = true }
 g3proxy-proto = { path = "proto" }
@@ -101,10 +103,11 @@ lua51 = ["lua", "mlua/lua51"]
 lua53 = ["lua", "mlua/lua53"]
 lua54 = ["lua", "mlua/lua54"]
 python = ["pyo3"]
-c-ares = ["g3-resolver/c-ares"]
+c-ares = ["g3-resolver/c-ares", "dep:c-ares-sys"]
 hickory = ["g3-resolver/hickory"]
 geoip = ["g3-geoip", "g3-yaml/geoip", "fixedbitset", "rustc-hash", "fnv"]
 quic = ["g3-daemon/quic", "g3-resolver/quic", "dep:quinn"]
-vendored-openssl = ["openssl/vendored", "dep:openssl-probe"]
-vendored-tongsuo = ["openssl/tongsuo", "dep:openssl-probe", "g3-yaml/vendored-tongsuo", "g3-json/vendored-tongsuo"]
+vendored-openssl = ["openssl/vendored", "openssl-probe"]
+vendored-tongsuo = ["openssl/tongsuo", "openssl-probe", "g3-yaml/tongsuo", "g3-json/tongsuo"]
+vendored-aws-lc = ["openssl/aws-lc", "openssl-probe", "g3-tls-cert/aws-lc"]
 vendored-c-ares = ["c-ares", "g3-resolver/vendored-c-ares"]

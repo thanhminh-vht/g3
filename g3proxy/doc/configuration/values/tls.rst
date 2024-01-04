@@ -343,6 +343,14 @@ The map is consists of the following fields:
 
   **default**: disabled
 
+* session_id_context
+
+  **optional**, **type**: str
+
+  A string that will be added to the prefix when calculate the session id context sha1 hash.
+
+  .. versionadded:: 1.7.32
+
 * ca_certificate | client_auth_certificate
 
   **optional**, **type**: :ref:`tls certificates <conf_value_tls_certificates>`

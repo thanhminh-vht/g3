@@ -94,11 +94,8 @@ impl KeyServer {
     pub(crate) fn prepare_initial(config: KeyServerConfig) -> KeyServer {
         let server_stats = KeyServerStats::new(config.name());
         let listen_stats = ListenStats::new(config.name());
-        let (duration_recorder, duration_stats) = KeyServerDurationRecorder::new(
-            config.name(),
-            &config.request_duration_quantile,
-            config.request_duration_rotate,
-        );
+        let (duration_recorder, duration_stats) =
+            KeyServerDurationRecorder::new(config.name(), &config.duration_stats);
         let concurrency_limit = if config.concurrency_limit > 0 {
             Some(Arc::new(Semaphore::new(config.concurrency_limit)))
         } else {
@@ -109,7 +106,7 @@ impl KeyServer {
             Arc::new(server_stats),
             Arc::new(listen_stats),
             duration_recorder,
-            Arc::new(duration_stats),
+            duration_stats,
             concurrency_limit,
             Arc::new(ArcSwap::new(Default::default())),
         )
@@ -121,12 +118,18 @@ impl KeyServer {
         } else {
             None
         };
+        let (duration_recorder, duration_stats) =
+            if self.config.duration_stats != config.duration_stats {
+                KeyServerDurationRecorder::new(config.name(), &config.duration_stats)
+            } else {
+                (self.duration_recorder.clone(), self.duration_stats.clone())
+            };
         KeyServer::new(
             config,
             self.server_stats.clone(),
             self.listen_stats.clone(),
-            self.duration_recorder.clone(),
-            self.duration_stats.clone(),
+            duration_recorder,
+            duration_stats,
             concurrency_limit,
             self.dynamic_metrics_tags.clone(),
         )
@@ -228,10 +231,15 @@ impl KeyServer {
 
         let (r, w) = stream.into_split();
         let task = KeylessTask::new(ctx);
+
+        #[cfg(feature = "openssl-async-job")]
         if self.config.multiplex_queue_depth > 1 {
             task.into_multiplex_running(r, w).await
         } else {
             task.into_simplex_running(r, w).await
         }
+
+        #[cfg(not(feature = "openssl-async-job"))]
+        task.into_simplex_running(r, w).await
     }
 }

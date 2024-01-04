@@ -20,7 +20,7 @@ use std::str::FromStr;
 use anyhow::{anyhow, Context};
 use yaml_rust::Yaml;
 
-use g3_histogram::Quantile;
+use g3_histogram::{HistogramMetricsConfig, Quantile};
 
 pub fn as_quantile(value: &Yaml) -> anyhow::Result<Quantile> {
     match value {
@@ -58,4 +58,31 @@ pub fn as_quantile_list(value: &Yaml) -> anyhow::Result<BTreeSet<Quantile>> {
         }
     }
     Ok(set)
+}
+
+pub fn as_histogram_metrics_config(value: &Yaml) -> anyhow::Result<HistogramMetricsConfig> {
+    if let Yaml::Hash(map) = value {
+        let mut config = HistogramMetricsConfig::default();
+        crate::foreach_kv(map, |k, v| match crate::key::normalize(k).as_str() {
+            "quantile" => {
+                let quantile_list = as_quantile_list(v)
+                    .context(format!("invalid quantile list value for key {k}"))?;
+                config.set_quantile_list(quantile_list);
+                Ok(())
+            }
+            "rotate" => {
+                let rotate = crate::humanize::as_duration(v)
+                    .context(format!("invalid humanize duration value for key {k}"))?;
+                config.set_rotate_interval(rotate);
+                Ok(())
+            }
+            _ => Err(anyhow!("invalid key {k}")),
+        })?;
+        Ok(config)
+    } else {
+        let rotate = crate::humanize::as_duration(value).context(
+            "the value for simplified form of histogram metrics config map should be humanize duration",
+        )?;
+        Ok(HistogramMetricsConfig::with_rotate(rotate))
+    }
 }

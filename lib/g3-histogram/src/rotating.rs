@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use hdrhistogram::{Counter, CreationError, Histogram};
+use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
 use crate::{HistogramRecorder, HistogramStats};
@@ -93,8 +94,9 @@ impl<T> RotatingHistogram<T>
 where
     T: Counter + Send + 'static,
 {
-    pub fn spawn_refresh(mut self, stats: Arc<HistogramStats>) {
-        tokio::spawn(async move {
+    pub fn spawn_refresh(mut self, stats: Arc<HistogramStats>, handle: Option<Handle>) {
+        let handle = handle.unwrap_or_else(Handle::current);
+        handle.spawn(async move {
             const BATCH_SIZE: usize = 16;
             let mut buf = Vec::with_capacity(BATCH_SIZE);
             let mut rotate_interval = tokio::time::interval(self.rotate_interval);
@@ -110,6 +112,7 @@ where
                         for v in buf.iter().take(n) {
                             let _ = self.inner.record(v.as_u64());
                         }
+                        buf.clear();
                     }
                     _ = rotate_interval.tick() => {
                         if !self.inner.is_empty() {

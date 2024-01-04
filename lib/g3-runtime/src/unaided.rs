@@ -31,7 +31,7 @@ pub struct UnaidedRuntimeConfig {
     thread_stack_size: Option<usize>,
     sched_affinity: HashMap<usize, CpuAffinity>,
     max_io_events_per_tick: Option<usize>,
-    #[cfg(feature = "openssl")]
+    #[cfg(feature = "openssl-async-job")]
     openssl_async_job_size: usize,
 }
 
@@ -48,7 +48,7 @@ impl UnaidedRuntimeConfig {
             thread_stack_size: None,
             sched_affinity: HashMap::new(),
             max_io_events_per_tick: None,
-            #[cfg(feature = "openssl")]
+            #[cfg(feature = "openssl-async-job")]
             openssl_async_job_size: 0,
         }
     }
@@ -102,9 +102,9 @@ impl UnaidedRuntimeConfig {
         self.max_io_events_per_tick = Some(capacity);
     }
 
-    #[cfg(feature = "openssl")]
+    #[cfg(feature = "openssl-async-job")]
     pub fn set_openssl_async_job_size(&mut self, size: usize) {
-        if openssl_async_job::async_is_capable() {
+        if g3_openssl::async_job::async_is_capable() {
             self.openssl_async_job_size = size;
         } else if size > 0 {
             warn!("openssl async job is not supported");
@@ -130,7 +130,7 @@ impl UnaidedRuntimeConfig {
 
             let cpu_set = self.sched_affinity.get(&i).cloned();
             let max_io_events_per_tick = self.max_io_events_per_tick;
-            #[cfg(feature = "openssl")]
+            #[cfg(feature = "openssl-async-job")]
             let openssl_async_job_size = self.openssl_async_job_size;
 
             thread_builder
@@ -149,10 +149,10 @@ impl UnaidedRuntimeConfig {
                         builder.max_io_events_per_tick(n);
                     }
 
-                    #[cfg(feature = "openssl")]
+                    #[cfg(feature = "openssl-async-job")]
                     if openssl_async_job_size > 0 {
                         builder.on_thread_start(move || {
-                            if let Err(e) = openssl_async_job::async_thread_init(
+                            if let Err(e) = g3_openssl::async_job::async_thread_init(
                                 openssl_async_job_size,
                                 openssl_async_job_size,
                             ) {
@@ -161,7 +161,7 @@ impl UnaidedRuntimeConfig {
                             );
                             }
                         });
-                        builder.on_thread_stop(openssl_async_job::async_thread_cleanup);
+                        builder.on_thread_stop(g3_openssl::async_job::async_thread_cleanup);
                     }
 
                     match builder.build() {

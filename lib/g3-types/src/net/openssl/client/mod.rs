@@ -23,13 +23,17 @@ use openssl::ssl::{
 use openssl::x509::store::X509StoreBuilder;
 use openssl::x509::X509;
 
-use super::{
-    OpensslCertificatePair, OpensslClientSessionCache, OpensslProtocol, OpensslSessionCacheConfig,
-};
+use super::{OpensslCertificatePair, OpensslProtocol};
 use crate::net::tls::AlpnProtocol;
 
-#[cfg(feature = "vendored-tongsuo")]
+#[cfg(feature = "tongsuo")]
 use super::OpensslTlcpCertificatePair;
+
+mod intercept;
+pub use intercept::{OpensslInterceptionClientConfig, OpensslInterceptionClientConfigBuilder};
+
+mod session;
+use session::{OpensslClientSessionCache, OpensslSessionCacheConfig};
 
 const MINIMAL_HANDSHAKE_TIMEOUT: Duration = Duration::from_millis(100);
 const DEFAULT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -65,7 +69,7 @@ pub struct OpensslClientConfigBuilder {
     ca_certs: Vec<Vec<u8>>,
     no_default_ca_certs: bool,
     client_cert_pair: Option<OpensslCertificatePair>,
-    #[cfg(feature = "vendored-tongsuo")]
+    #[cfg(feature = "tongsuo")]
     client_tlcp_cert_pair: Option<OpensslTlcpCertificatePair>,
     handshake_timeout: Duration,
     session_cache: OpensslSessionCacheConfig,
@@ -80,7 +84,7 @@ impl Default for OpensslClientConfigBuilder {
             ca_certs: Vec::new(),
             no_default_ca_certs: false,
             client_cert_pair: None,
-            #[cfg(feature = "vendored-tongsuo")]
+            #[cfg(feature = "tongsuo")]
             client_tlcp_cert_pair: None,
             handshake_timeout: DEFAULT_HANDSHAKE_TIMEOUT,
             session_cache: OpensslSessionCacheConfig::default(),
@@ -108,7 +112,7 @@ impl OpensslClientConfigBuilder {
             cert_pair.check()?;
         }
 
-        #[cfg(feature = "vendored-tongsuo")]
+        #[cfg(feature = "tongsuo")]
         if let Some(tlcp_cert_pair) = &self.client_tlcp_cert_pair {
             tlcp_cert_pair.check()?;
         }
@@ -165,7 +169,7 @@ impl OpensslClientConfigBuilder {
         self.client_cert_pair.replace(pair)
     }
 
-    #[cfg(feature = "vendored-tongsuo")]
+    #[cfg(feature = "tongsuo")]
     pub fn set_tlcp_cert_pair(
         &mut self,
         pair: OpensslTlcpCertificatePair,
@@ -193,7 +197,7 @@ impl OpensslClientConfigBuilder {
         self.session_cache.set_each_capacity(cap);
     }
 
-    #[cfg(feature = "vendored-tongsuo")]
+    #[cfg(feature = "tongsuo")]
     fn new_tlcp_builder(&self) -> anyhow::Result<SslConnectorBuilder> {
         let mut ctx_builder = SslConnector::builder(SslMethod::ntls_client())
             .map_err(|e| anyhow!("failed to create ssl context builder: {e}"))?;
@@ -202,7 +206,7 @@ impl OpensslClientConfigBuilder {
 
         let mut use_dhe = false;
         if let Some(cert_pair) = &self.client_tlcp_cert_pair {
-            cert_pair.add_to_ssl_context(&mut ctx_builder)?;
+            cert_pair.add_to_client_ssl_context(&mut ctx_builder)?;
             use_dhe = true;
         }
 
@@ -250,7 +254,7 @@ impl OpensslClientConfigBuilder {
         }
 
         if let Some(cert_pair) = &self.client_cert_pair {
-            cert_pair.add_to_ssl_context(&mut ctx_builder)?;
+            cert_pair.add_to_client_ssl_context(&mut ctx_builder)?;
         }
 
         Ok(ctx_builder)
@@ -276,7 +280,7 @@ impl OpensslClientConfigBuilder {
         }
 
         if let Some(cert_pair) = &self.client_cert_pair {
-            cert_pair.add_to_ssl_context(&mut ctx_builder)?;
+            cert_pair.add_to_client_ssl_context(&mut ctx_builder)?;
         }
 
         Ok(ctx_builder)
@@ -288,7 +292,7 @@ impl OpensslClientConfigBuilder {
         ctx_builder.set_verify(SslVerifyMode::PEER);
 
         if let Some(cert_pair) = &self.client_cert_pair {
-            cert_pair.add_to_ssl_context(&mut ctx_builder)?;
+            cert_pair.add_to_client_ssl_context(&mut ctx_builder)?;
         }
 
         Ok(ctx_builder)
@@ -304,7 +308,7 @@ impl OpensslClientConfigBuilder {
             Some(OpensslProtocol::Tls11) => self.new_versioned_builder(SslVersion::TLS1_1)?,
             Some(OpensslProtocol::Tls12) => self.new_versioned_builder(SslVersion::TLS1_2)?,
             Some(OpensslProtocol::Tls13) => self.new_tls13_builder()?,
-            #[cfg(feature = "vendored-tongsuo")]
+            #[cfg(feature = "tongsuo")]
             Some(OpensslProtocol::Tlcp11) => self.new_tlcp_builder()?,
             None => self.new_default_builder()?,
         };
@@ -352,139 +356,5 @@ impl OpensslClientConfigBuilder {
 
     pub fn build(&self) -> anyhow::Result<OpensslClientConfig> {
         self.build_with_alpn_protocols(None)
-    }
-}
-
-#[derive(Clone)]
-pub struct OpensslInterceptionClientConfig {
-    ssl_context: SslContext,
-    pub handshake_timeout: Duration,
-    session_cache: Option<OpensslClientSessionCache>,
-}
-
-impl OpensslInterceptionClientConfig {
-    pub fn build_ssl<'a>(
-        &'a self,
-        tls_name: &str,
-        port: u16,
-        disable_sni: bool,
-        alpn_protocols: Option<impl Iterator<Item = &'a [u8]>>,
-    ) -> anyhow::Result<Ssl> {
-        let mut ssl =
-            Ssl::new(&self.ssl_context).map_err(|e| anyhow!("failed to get new Ssl state: {e}"))?;
-        if !disable_sni {
-            ssl.set_hostname(tls_name)
-                .map_err(|e| anyhow!("failed to set hostname: {e}"))?;
-        }
-        if let Some(cache) = &self.session_cache {
-            cache.find_and_set_cache(&mut ssl, tls_name, port)?;
-        }
-        if let Some(protocols) = alpn_protocols {
-            let mut buf = Vec::with_capacity(32);
-            protocols.for_each(|p| {
-                if let Ok(len) = u8::try_from(p.len()) {
-                    buf.push(len);
-                    buf.extend_from_slice(p);
-                }
-            });
-            ssl.set_alpn_protos(buf.as_slice())
-                .map_err(|e| anyhow!("failed to set alpn protocols: {e}"))?;
-        }
-        Ok(ssl)
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct OpensslInterceptionClientConfigBuilder {
-    ca_certs: Vec<Vec<u8>>,
-    no_default_ca_certs: bool,
-    handshake_timeout: Duration,
-    session_cache: OpensslSessionCacheConfig,
-}
-
-impl Default for OpensslInterceptionClientConfigBuilder {
-    fn default() -> Self {
-        OpensslInterceptionClientConfigBuilder {
-            ca_certs: Vec::new(),
-            no_default_ca_certs: false,
-            handshake_timeout: DEFAULT_HANDSHAKE_TIMEOUT,
-            session_cache: OpensslSessionCacheConfig::default(),
-        }
-    }
-}
-
-impl OpensslInterceptionClientConfigBuilder {
-    pub fn check(&mut self) -> anyhow::Result<()> {
-        if self.handshake_timeout < MINIMAL_HANDSHAKE_TIMEOUT {
-            self.handshake_timeout = MINIMAL_HANDSHAKE_TIMEOUT;
-        }
-
-        Ok(())
-    }
-
-    pub fn set_ca_certificates(&mut self, certs: Vec<X509>) -> anyhow::Result<()> {
-        let mut all_der = Vec::with_capacity(certs.len());
-        for (i, cert) in certs.into_iter().enumerate() {
-            let bytes = cert
-                .to_der()
-                .map_err(|e| anyhow!("failed to encode ca certificate #{i}: {e}"))?;
-            all_der.push(bytes);
-        }
-        self.ca_certs = all_der;
-        Ok(())
-    }
-
-    pub fn set_no_default_ca_certificates(&mut self) {
-        self.no_default_ca_certs = true;
-    }
-
-    pub fn set_handshake_timeout(&mut self, timeout: Duration) {
-        self.handshake_timeout = timeout;
-    }
-
-    #[inline]
-    pub fn set_no_session_cache(&mut self) {
-        self.session_cache.set_no_session_cache();
-    }
-
-    #[inline]
-    pub fn set_session_cache_sites_count(&mut self, max: usize) {
-        self.session_cache.set_sites_count(max);
-    }
-
-    #[inline]
-    pub fn set_session_cache_each_capacity(&mut self, cap: usize) {
-        self.session_cache.set_each_capacity(cap);
-    }
-
-    pub fn build(&self) -> anyhow::Result<OpensslInterceptionClientConfig> {
-        let mut ctx_builder = SslConnector::builder(SslMethod::tls_client())
-            .map_err(|e| anyhow!("failed to create ssl context builder: {e}"))?;
-        ctx_builder.set_verify(SslVerifyMode::PEER);
-
-        let mut store_builder = X509StoreBuilder::new()
-            .map_err(|e| anyhow!("failed to create ca cert store builder: {e}"))?;
-        if !self.no_default_ca_certs {
-            store_builder
-                .set_default_paths()
-                .map_err(|e| anyhow!("failed to load default ca certs: {e}"))?;
-        }
-        for (i, cert) in self.ca_certs.iter().enumerate() {
-            let ca_cert = X509::from_der(cert.as_slice()).unwrap();
-            store_builder
-                .add_cert(ca_cert)
-                .map_err(|e| anyhow!("failed to add ca certificate #{i}: {e}"))?;
-        }
-        ctx_builder
-            .set_verify_cert_store(store_builder.build())
-            .map_err(|e| anyhow!("failed to set ca certs: {e}"))?;
-
-        let session_cache = self.session_cache.set_for_client(&mut ctx_builder)?;
-
-        Ok(OpensslInterceptionClientConfig {
-            ssl_context: ctx_builder.build().into_context(),
-            handshake_timeout: self.handshake_timeout,
-            session_cache,
-        })
     }
 }

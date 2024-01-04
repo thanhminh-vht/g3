@@ -17,7 +17,9 @@
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
-use openssl::ssl::{SslAcceptor, SslContext, SslMethod, SslSessionCacheMode, SslVerifyMode};
+use openssl::ssl::{
+    SslAcceptor, SslContext, SslContextBuilder, SslMethod, SslSessionCacheMode, SslVerifyMode,
+};
 use openssl::stack::Stack;
 use openssl::x509::store::X509StoreBuilder;
 use openssl::x509::X509;
@@ -25,7 +27,7 @@ use yaml_rust::Yaml;
 
 use g3_types::collection::NamedValue;
 use g3_types::limit::RateLimitQuotaConfig;
-use g3_types::net::{OpensslCertificatePair, TcpSockSpeedLimitConfig};
+use g3_types::net::{OpensslCertificatePair, OpensslSessionIdContext, TcpSockSpeedLimitConfig};
 use g3_types::route::AlpnMatch;
 use g3_yaml::{YamlDocPosition, YamlMapCallback};
 
@@ -42,6 +44,7 @@ pub(crate) struct OpensslHostConfig {
     tlcp_cert_pairs: Vec<OpensslTlcpCertificatePair>,
     client_auth: bool,
     client_auth_certs: Vec<Vec<u8>>,
+    session_id_context: String,
     pub(crate) request_alive_max: Option<usize>,
     pub(crate) request_rate_limit: Option<RateLimitQuotaConfig>,
     pub(crate) tcp_sock_speed_limit: Option<TcpSockSpeedLimitConfig>,
@@ -73,21 +76,19 @@ impl OpensslHostConfig {
         Ok(())
     }
 
-    pub(crate) fn build_ssl_context(&self) -> anyhow::Result<Option<SslContext>> {
-        if self.cert_pairs.is_empty() {
-            return Ok(None);
-        }
-
-        let mut ssl_builder = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls_server())
-            .map_err(|e| anyhow!("failed to build ssl context: {e}"))?;
-
-        ssl_builder.set_session_cache_mode(SslSessionCacheMode::SERVER); // TODO use external cache?
-
+    fn set_client_auth(
+        &self,
+        ssl_builder: &mut SslContextBuilder,
+        id_ctx: &mut OpensslSessionIdContext,
+    ) -> anyhow::Result<()> {
         if self.client_auth {
             ssl_builder.set_verify(SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT);
 
             let mut store_builder = X509StoreBuilder::new()
                 .map_err(|e| anyhow!("failed to create ca cert store builder: {e}"))?;
+            let mut subject_stack =
+                Stack::new().map_err(|e| anyhow!("failed to get new ca name stack: {e}"))?;
+
             if self.client_auth_certs.is_empty() {
                 store_builder
                     .set_default_paths()
@@ -95,40 +96,67 @@ impl OpensslHostConfig {
             } else {
                 for (i, cert) in self.client_auth_certs.iter().enumerate() {
                     let ca_cert = X509::from_der(cert.as_slice()).unwrap();
+                    let subject = ca_cert
+                        .subject_name()
+                        .to_owned()
+                        .map_err(|e| anyhow!("[#{i}] failed to get ca subject name: {e}"))?;
+                    id_ctx
+                        .add_ca_subject(&subject)
+                        .map_err(|e| anyhow!("#[{i}]: failed to add to session id context: {e}"))?;
                     store_builder
                         .add_cert(ca_cert)
                         .map_err(|e| anyhow!("[#{i}] failed to add ca certificate: {e}"))?;
+                    subject_stack
+                        .push(subject)
+                        .map_err(|e| anyhow!("[#{i}] failed to push to ca name stack: {e}"))?;
                 }
             }
             let store = store_builder.build();
 
-            let mut ca_stack =
-                Stack::new().map_err(|e| anyhow!("failed to get new ca name stack: {e}"))?;
-            for (i, cert) in store.all_certificates().iter().enumerate() {
-                let name = cert
-                    .subject_name()
-                    .to_owned()
-                    .map_err(|e| anyhow!("[#{i}] failed to get subject name: {e}"))?;
-                ca_stack
-                    .push(name)
-                    .map_err(|e| anyhow!("[#{i}] failed to push to ca name stack: {e}"))?;
-            }
-
-            ssl_builder.set_client_ca_list(ca_stack);
             ssl_builder
                 .set_verify_cert_store(store)
                 .map_err(|e| anyhow!("failed to set ca certs: {e}"))?;
+            if !subject_stack.is_empty() {
+                ssl_builder.set_client_ca_list(subject_stack);
+            }
         } else {
             ssl_builder.set_verify(SslVerifyMode::NONE);
         }
+
+        Ok(())
+    }
+
+    pub(crate) fn build_ssl_context(&self) -> anyhow::Result<Option<SslContext>> {
+        if self.cert_pairs.is_empty() {
+            return Ok(None);
+        }
+
+        let mut id_ctx = OpensslSessionIdContext::new()
+            .map_err(|e| anyhow!("failed to create session id context builder: {e}"))?;
+        if !self.session_id_context.is_empty() {
+            id_ctx
+                .add_text(&self.session_id_context)
+                .map_err(|e| anyhow!("failed to add session id context text: {e}"))?;
+        }
+
+        let mut ssl_builder = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls_server())
+            .map_err(|e| anyhow!("failed to build ssl context: {e}"))?;
+
+        ssl_builder.set_session_cache_mode(SslSessionCacheMode::SERVER); // TODO use external cache?
+
+        self.set_client_auth(&mut ssl_builder, &mut id_ctx)?;
 
         // ssl_builder.set_mode() // TODO do we need it?
         // ssl_builder.set_options() // TODO do we need it?
 
         for (i, pair) in self.cert_pairs.iter().enumerate() {
-            pair.add_to_ssl_context(&mut ssl_builder)
+            pair.add_to_server_ssl_context(&mut ssl_builder, &mut id_ctx)
                 .context(format!("failed to add cert pair #{i} to ssl context"))?;
         }
+
+        id_ctx
+            .build_set(&mut ssl_builder)
+            .map_err(|e| anyhow!("failed to set session id context: {e}"))?;
 
         if !self.services.is_empty() {
             let mut buf = Vec::with_capacity(32);
@@ -152,10 +180,16 @@ impl OpensslHostConfig {
 
     #[cfg(feature = "vendored-tongsuo")]
     pub(crate) fn build_tlcp_context(&self) -> anyhow::Result<Option<SslContext>> {
-        use openssl::x509::X509Name;
-
         if self.tlcp_cert_pairs.is_empty() {
             return Ok(None);
+        }
+
+        let mut id_ctx = OpensslSessionIdContext::new()
+            .map_err(|e| anyhow!("failed to create session id context builder: {e}"))?;
+        if !self.session_id_context.is_empty() {
+            id_ctx
+                .add_text(&self.session_id_context)
+                .map_err(|e| anyhow!("failed to add session id context text: {e}"))?;
         }
 
         let mut ssl_builder = SslAcceptor::mozilla_intermediate_v5(SslMethod::ntls_server())
@@ -170,51 +204,16 @@ impl OpensslHostConfig {
 
         ssl_builder.set_session_cache_mode(SslSessionCacheMode::SERVER); // TODO use external cache?
 
-        if self.client_auth {
-            ssl_builder.set_verify(SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT);
-
-            let mut store_builder = X509StoreBuilder::new()
-                .map_err(|e| anyhow!("failed to create ca cert store builder: {e}"))?;
-            if self.client_auth_certs.is_empty() {
-                store_builder
-                    .set_default_paths()
-                    .map_err(|e| anyhow!("failed to load default ca certs: {e}"))?;
-            } else {
-                for (i, cert) in self.client_auth_certs.iter().enumerate() {
-                    let ca_cert = X509::from_der(cert.as_slice()).unwrap();
-                    store_builder
-                        .add_cert(ca_cert)
-                        .map_err(|e| anyhow!("failed to add ca certificate #{i}: {e}"))?;
-                }
-            }
-            let store = store_builder.build();
-
-            let mut ca_stack =
-                Stack::new().map_err(|e| anyhow!("failed to get new ca name stack: {e}"))?;
-            for (i, cert) in store.all_certificates().iter().enumerate() {
-                let der = cert
-                    .subject_name()
-                    .to_der()
-                    .map_err(|e| anyhow!("[#{i}] failed to convert subject name: {e}"))?;
-                let name = X509Name::from_der(&der)
-                    .map_err(|e| anyhow!("[#{i}] failed to convert back subject name: {e}"))?;
-                ca_stack
-                    .push(name)
-                    .map_err(|e| anyhow!("[#{i}] failed to push to ca name stack: {e}"))?;
-            }
-
-            ssl_builder.set_client_ca_list(ca_stack);
-            ssl_builder
-                .set_verify_cert_store(store)
-                .map_err(|e| anyhow!("failed to set ca certs: {e}"))?;
-        } else {
-            ssl_builder.set_verify(SslVerifyMode::NONE);
-        }
+        self.set_client_auth(&mut ssl_builder, &mut id_ctx)?;
 
         for (i, pair) in self.tlcp_cert_pairs.iter().enumerate() {
-            pair.add_to_ssl_context(&mut ssl_builder)
+            pair.add_to_server_ssl_context(&mut ssl_builder, &mut id_ctx)
                 .context(format!("failed to add tlcp cert pair #{i} to ssl context"))?;
         }
+
+        id_ctx
+            .build_set(&mut ssl_builder)
+            .map_err(|e| anyhow!("failed to set session id context: {e}"))?;
 
         if !self.services.is_empty() {
             let mut buf = Vec::with_capacity(32);
@@ -275,6 +274,10 @@ impl YamlMapCallback for OpensslHostConfig {
             "enable_client_auth" => {
                 self.client_auth = g3_yaml::value::as_bool(value)
                     .context(format!("invalid value for key {key}"))?;
+                Ok(())
+            }
+            "session_id_context" => {
+                self.session_id_context = g3_yaml::value::as_string(value)?;
                 Ok(())
             }
             "ca_certificate" | "ca_cert" | "client_auth_certificate" | "client_auth_cert" => {

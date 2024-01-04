@@ -68,7 +68,7 @@ pub use statsd::as_statsd_client_config;
 #[cfg(feature = "histogram")]
 mod histogram;
 #[cfg(feature = "histogram")]
-pub use histogram::{as_quantile, as_quantile_list};
+pub use histogram::{as_histogram_metrics_config, as_quantile, as_quantile_list};
 
 #[cfg(feature = "resolve")]
 mod resolve;
@@ -85,7 +85,7 @@ pub use self::rustls::{
 
 #[cfg(feature = "openssl")]
 mod openssl;
-#[cfg(feature = "vendored-tongsuo")]
+#[cfg(feature = "tongsuo")]
 pub use self::openssl::as_openssl_tlcp_certificate_pair;
 #[cfg(feature = "openssl")]
 pub use self::openssl::{

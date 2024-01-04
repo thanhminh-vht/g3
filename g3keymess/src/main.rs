@@ -25,7 +25,7 @@ use log::{debug, error, info, warn};
 use g3keymess::opts::ProcArgs;
 
 fn main() -> anyhow::Result<()> {
-    #[cfg(any(feature = "vendored-openssl", feature = "vendored-tongsuo"))]
+    #[cfg(feature = "openssl-probe")]
     openssl_probe::init_ssl_cert_env_vars();
     openssl::init();
 
@@ -87,14 +87,16 @@ fn tokio_run(args: &ProcArgs) -> anyhow::Result<()> {
     let mut rt_builder = tokio::runtime::Builder::new_current_thread();
     rt_builder.enable_all();
 
+    #[cfg(feature = "openssl-async-job")]
     if let Some(async_job_size) = args.openssl_async_job {
         info!("will init {async_job_size} openssl async jobs");
         rt_builder.on_thread_start(move || {
-            if let Err(e) = openssl_async_job::async_thread_init(async_job_size, async_job_size) {
+            if let Err(e) = g3_openssl::async_job::async_thread_init(async_job_size, async_job_size)
+            {
                 warn!("failed to init {async_job_size} openssl async jobs: {e}");
             }
         });
-        rt_builder.on_thread_stop(openssl_async_job::async_thread_cleanup);
+        rt_builder.on_thread_stop(g3_openssl::async_job::async_thread_cleanup);
     }
 
     let rt = rt_builder
@@ -103,7 +105,8 @@ fn tokio_run(args: &ProcArgs) -> anyhow::Result<()> {
     rt.block_on(async {
         let ret: anyhow::Result<()> = Ok(());
 
-        g3_daemon::control::bridge::set_main_runtime_handle();
+        g3_daemon::runtime::set_main_handle();
+
         let ctl_thread_handler = g3keymess::control::capnp::spawn_working_thread().await?;
 
         let unique_controller = g3keymess::control::UniqueController::create()

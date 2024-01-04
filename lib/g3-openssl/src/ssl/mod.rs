@@ -14,15 +14,23 @@
  * limitations under the License.
  */
 
-use tokio::runtime::Handle;
+mod wrapper;
+use wrapper::SslIoWrapper;
 
-static mut MAIN_HANDLE: Option<Handle> = None;
+#[cfg(feature = "async-job")]
+mod async_mode;
+#[cfg(feature = "async-job")]
+use async_mode::AsyncEnginePoller;
 
-pub fn main_runtime_handle() -> Option<&'static Handle> {
-    unsafe { MAIN_HANDLE.as_ref() }
-}
+mod stream;
+pub use stream::SslStream;
 
-pub fn set_main_runtime_handle() {
-    let handle = Handle::current();
-    unsafe { MAIN_HANDLE = Some(handle) }
-}
+#[cfg_attr(not(feature = "async-job"), path = "accept.rs")]
+#[cfg_attr(feature = "async-job", path = "async_accept.rs")]
+mod accept;
+pub use accept::SslAcceptor;
+
+#[cfg_attr(not(feature = "async-job"), path = "connect.rs")]
+#[cfg_attr(feature = "async-job", path = "async_connect.rs")]
+mod connect;
+pub use connect::SslConnector;
