@@ -184,6 +184,51 @@ Set the protocol indication for each client side tcp port.
 
 See the code `lib/g3-dpi/src/protocol/portmap.rs` for default set ports.
 
+.. _conf_value_dpi_stream_dump:
+
+stream dump
+-----------
+
+**type**: map | str
+
+Set stream dump config. You can use this to dump streams to `wireshark udpdump`_.
+
+.. _wireshark udpdump: https://www.wireshark.org/docs/man-pages/udpdump.html
+
+The keys are:
+
+* peer
+
+  **required**, **type**: :ref:`env sockaddr str <conf_value_env_sockaddr_str>`
+
+  Set the peer udp socket address.
+
+  **default**: 127.0.0.1:5555
+
+* socket_buffer
+
+  **optional**, **type**: :ref:`socket buffer config <conf_value_socket_buffer_config>`
+
+  Set the buffer config for the udp socket.
+
+  **default**: not set
+
+* misc_opts
+
+  **optional**, **type**: :ref:`udp misc sock opts <conf_value_udp_misc_sock_opts>`
+
+  Set misc udp socket options on created udp sockets.
+
+  **default**: not set
+
+* packet_size
+
+  **optional**, **type**: usize
+
+  Set the max udp packet size.
+
+  **default**: 1480
+
 TLS Interception
 ================
 
@@ -222,6 +267,8 @@ The keys are:
 
   **default**: 400ms
 
+.. _conf_value_dpi_tls_cert_agent_protective_cache_ttl:
+
 * protective_cache_ttl
 
   **optional**, **type**: u32
@@ -253,6 +300,8 @@ The keys are:
   Set the request timeout for the caller.
 
   **default**: 800ms
+
+.. _conf_value_dpi_tls_cert_agent_cache_vanish_wait:
 
 * cache_vanish_wait
 

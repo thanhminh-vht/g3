@@ -33,7 +33,7 @@ impl proc_control::Server for ProcControlImpl {
         _params: proc_control::VersionParams,
         mut results: proc_control::VersionResults,
     ) -> Promise<(), capnp::Error> {
-        results.get().set_version(crate::build::VERSION.into());
+        results.get().set_version(crate::build::VERSION);
         Promise::ok(())
     }
 
@@ -57,7 +57,7 @@ impl proc_control::Server for ProcControlImpl {
         let set = crate::serve::get_names();
         let mut builder = results.get().init_result(set.len() as u32);
         for (i, name) in set.iter().enumerate() {
-            builder.set(i as u32, name.as_str().into());
+            builder.set(i as u32, name.as_str());
         }
         Promise::ok(())
     }
@@ -94,7 +94,7 @@ impl proc_control::Server for ProcControlImpl {
         mut results: proc_control::ForceQuitOfflineServersResults,
     ) -> Promise<(), capnp::Error> {
         crate::serve::force_quit_offline_servers();
-        results.get().init_result().set_ok("success".into());
+        results.get().init_result().set_ok("success");
         Promise::ok(())
     }
 
@@ -106,7 +106,59 @@ impl proc_control::Server for ProcControlImpl {
         let server = pry!(pry!(pry!(params.get()).get_name()).to_str());
         let server = unsafe { MetricsName::from_str_unchecked(server) };
         crate::serve::force_quit_offline_server(&server);
-        results.get().init_result().set_ok("success".into());
+        results.get().init_result().set_ok("success");
+        Promise::ok(())
+    }
+
+    fn reload_discover(
+        &mut self,
+        params: proc_control::ReloadDiscoverParams,
+        mut results: proc_control::ReloadDiscoverResults,
+    ) -> Promise<(), capnp::Error> {
+        let discover = pry!(pry!(pry!(params.get()).get_name()).to_string());
+        Promise::from_future(async move {
+            let r = crate::control::bridge::reload_discover(discover, None).await;
+            set_operation_result(results.get().init_result(), r);
+            Ok(())
+        })
+    }
+
+    fn list_discover(
+        &mut self,
+        _params: proc_control::ListDiscoverParams,
+        mut results: proc_control::ListDiscoverResults,
+    ) -> Promise<(), capnp::Error> {
+        let set = crate::discover::get_names();
+        let mut builder = results.get().init_result(set.len() as u32);
+        for (i, name) in set.iter().enumerate() {
+            builder.set(i as u32, name.as_str());
+        }
+        Promise::ok(())
+    }
+
+    fn reload_backend(
+        &mut self,
+        params: proc_control::ReloadBackendParams,
+        mut results: proc_control::ReloadBackendResults,
+    ) -> Promise<(), capnp::Error> {
+        let connector = pry!(pry!(pry!(params.get()).get_name()).to_string());
+        Promise::from_future(async move {
+            let r = crate::control::bridge::reload_backend(connector, None).await;
+            set_operation_result(results.get().init_result(), r);
+            Ok(())
+        })
+    }
+
+    fn list_backend(
+        &mut self,
+        _params: proc_control::ListBackendParams,
+        mut results: proc_control::ListBackendResults,
+    ) -> Promise<(), capnp::Error> {
+        let set = crate::backend::get_names();
+        let mut builder = results.get().init_result(set.len() as u32);
+        for (i, name) in set.iter().enumerate() {
+            builder.set(i as u32, name.as_str());
+        }
         Promise::ok(())
     }
 }
@@ -123,7 +175,7 @@ where
         Err(e) => {
             let mut ev = builder.init_err();
             ev.set_code(-1);
-            ev.set_reason(format!("{e:?}").as_str().into());
+            ev.set_reason(format!("{e:?}").as_str());
             Ok(())
         }
     }

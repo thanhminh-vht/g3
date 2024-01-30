@@ -25,6 +25,7 @@ use super::{
     OpensslClientSessionCache, OpensslSessionCacheConfig, DEFAULT_HANDSHAKE_TIMEOUT,
     MINIMAL_HANDSHAKE_TIMEOUT,
 };
+use crate::net::UpstreamAddr;
 
 #[derive(Clone)]
 pub struct OpensslInterceptionClientConfig {
@@ -36,19 +37,22 @@ pub struct OpensslInterceptionClientConfig {
 impl OpensslInterceptionClientConfig {
     pub fn build_ssl<'a>(
         &'a self,
-        tls_name: &str,
-        port: u16,
-        disable_sni: bool,
+        sni_hostname: Option<&str>,
+        upstream: &UpstreamAddr,
         alpn_protocols: Option<impl Iterator<Item = &'a [u8]>>,
     ) -> anyhow::Result<Ssl> {
         let mut ssl =
             Ssl::new(&self.ssl_context).map_err(|e| anyhow!("failed to get new Ssl state: {e}"))?;
-        if !disable_sni {
-            ssl.set_hostname(tls_name)
-                .map_err(|e| anyhow!("failed to set hostname: {e}"))?;
+        if let Some(domain) = sni_hostname {
+            let verify_param = ssl.param_mut();
+            verify_param
+                .set_host(domain)
+                .map_err(|e| anyhow!("failed to set cert verify domain: {e}"))?;
+            ssl.set_hostname(domain)
+                .map_err(|e| anyhow!("failed to set sni hostname: {e}"))?;
         }
         if let Some(cache) = &self.session_cache {
-            cache.find_and_set_cache(&mut ssl, tls_name, port)?;
+            cache.find_and_set_cache(&mut ssl, upstream.host(), upstream.port())?;
         }
         if let Some(protocols) = alpn_protocols {
             let mut buf = Vec::with_capacity(32);

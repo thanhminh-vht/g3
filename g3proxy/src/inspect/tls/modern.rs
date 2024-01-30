@@ -14,14 +14,17 @@
  * limitations under the License.
  */
 
+use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::anyhow;
+use tokio::io::{AsyncRead, AsyncWrite};
 
 use g3_dpi::{Protocol, ProtocolInspector};
 use g3_io_ext::{AggregatedIo, FlexBufReader, OnceBufReader};
 use g3_openssl::SslConnector;
-use g3_types::net::AlpnProtocol;
+use g3_types::net::{AlpnProtocol, Host};
+use g3_udpdump::ExportedPduDissectorHint;
 
 use super::{TlsInterceptIo, TlsInterceptObject, TlsInterceptionError};
 use crate::config::server::ServerConfig;
@@ -79,19 +82,16 @@ where
         let client_hello = client_handshake.client_hello();
 
         // build to server ssl context based on client hello
-        let hostname = client_hello
-            .server_name()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| self.upstream.host().to_string());
+        let sni_hostname = client_hello.server_name();
+        if let Some(domain) = sni_hostname {
+            if let Ok(host) = Host::from_str(domain) {
+                self.upstream.set_host(host);
+            }
+        }
         let ups_ssl = self
             .tls_interception
             .client_config
-            .build_ssl(
-                &hostname,
-                self.upstream.port(),
-                client_hello.server_name().is_none(),
-                client_hello.alpn(),
-            )
+            .build_ssl(sni_hostname, &self.upstream, client_hello.alpn())
             .map_err(|e| {
                 TlsInterceptionError::UpstreamPrepareFailed(anyhow!(
                     "failed to build ssl context: {e}"
@@ -100,8 +100,11 @@ where
 
         // fetch fake server cert early in the background
         let tls_interception = self.tls_interception.clone();
+        let cert_domain = sni_hostname
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| self.upstream.host().to_string());
         let clt_cert_handle =
-            tokio::spawn(async move { tls_interception.cert_agent.fetch(hostname).await });
+            tokio::spawn(async move { tls_interception.cert_agent.fetch(cert_domain).await });
 
         // handshake with upstream server
         let ups_tls_connector = SslConnector::new(ups_ssl, AggregatedIo::new(ups_r, ups_w))
@@ -147,14 +150,17 @@ where
                 ))
             })?;
         let mut protocol = Protocol::Unknown;
-        if let Some(alpn_protocol) = selected_alpn_protocol {
+        let has_alpn = if let Some(alpn_protocol) = selected_alpn_protocol {
             if let Some(p) = AlpnProtocol::from_buf(alpn_protocol) {
                 inspector.push_alpn_protocol(p);
                 protocol = Protocol::from(p);
             }
 
             clt_server_config.alpn_protocols = vec![alpn_protocol.to_owned()];
-        }
+            true
+        } else {
+            false
+        };
         let clt_tls_stream = tokio::time::timeout(
             handshake_timeout,
             client_handshake.into_stream(Arc::new(clt_server_config)),
@@ -168,6 +174,44 @@ where
         let (clt_r, clt_w) = tokio::io::split(clt_tls_stream);
         let (ups_r, ups_w) = tokio::io::split(ups_tls_stream);
 
+        let obj = if let Some(stream_dumper) = self
+            .tls_interception
+            .get_stream_dumper(self.ctx.task_notes.worker_id)
+        {
+            let dissector_hint = if !protocol.wireshark_dissector().is_empty() {
+                ExportedPduDissectorHint::Protocol(protocol)
+            } else {
+                ExportedPduDissectorHint::TlsPort(self.upstream.port())
+            };
+            let (clt_w, ups_w) = stream_dumper.wrap_io(
+                self.ctx.task_notes.client_addr,
+                self.ctx.task_notes.server_addr,
+                dissector_hint,
+                clt_w,
+                ups_w,
+            );
+            self.inspect_inner(protocol, has_alpn, clt_r, clt_w, ups_r, ups_w)
+        } else {
+            self.inspect_inner(protocol, has_alpn, clt_r, clt_w, ups_r, ups_w)
+        };
+        Ok(obj)
+    }
+
+    fn inspect_inner<CR, CW, UR, UW>(
+        &self,
+        protocol: Protocol,
+        has_alpn: bool,
+        clt_r: CR,
+        clt_w: CW,
+        ups_r: UR,
+        ups_w: UW,
+    ) -> StreamInspection<SC>
+    where
+        CR: AsyncRead + Send + Unpin + 'static,
+        CW: AsyncWrite + Send + Unpin + 'static,
+        UR: AsyncRead + Send + Unpin + 'static,
+        UW: AsyncWrite + Send + Unpin + 'static,
+    {
         let mut ctx = self.ctx.clone();
         ctx.increase_inspection_depth();
         StreamInspectLog::new(&ctx).log(InspectSource::TlsAlpn, protocol);
@@ -180,7 +224,7 @@ where
                     Box::new(ups_r),
                     Box::new(ups_w),
                 );
-                Ok(StreamInspection::H1(h1_obj))
+                StreamInspection::H1(h1_obj)
             }
             Protocol::Http2 => {
                 let mut h2_obj = crate::inspect::http::H2InterceptObject::new(ctx);
@@ -190,7 +234,7 @@ where
                     Box::new(ups_r),
                     Box::new(ups_w),
                 );
-                Ok(StreamInspection::H2(h2_obj))
+                StreamInspection::H2(h2_obj)
             }
             _ => {
                 let mut stream_obj =
@@ -201,7 +245,13 @@ where
                     Box::new(ups_r),
                     Box::new(ups_w),
                 );
-                Ok(StreamInspection::StreamUnknown(stream_obj))
+                if has_alpn {
+                    // Just treat it as unknown. Unknown protocol should be forbidden if needed.
+                    StreamInspection::StreamUnknown(stream_obj)
+                } else {
+                    // Inspect if no ALPN is set
+                    StreamInspection::StreamInspect(stream_obj)
+                }
             }
         }
     }

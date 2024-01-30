@@ -47,7 +47,7 @@ pub async fn spawn_workers() -> anyhow::Result<Option<WorkersGuard>> {
 
 #[inline]
 fn handles() -> &'static [WorkerHandle] {
-    unsafe { &WORKER_HANDLERS }
+    unsafe { WORKER_HANDLERS.as_slice() }
 }
 
 pub fn worker_count() -> usize {
@@ -97,9 +97,9 @@ pub fn select_listen_handle() -> Option<WorkerHandle> {
     }
 }
 
-pub fn foreach<F, E>(spawn: F) -> Result<usize, E>
+pub fn foreach<F, E>(mut spawn: F) -> Result<usize, E>
 where
-    F: Fn(&WorkerHandle) -> Result<(), E>,
+    F: FnMut(&WorkerHandle) -> Result<(), E>,
 {
     let mut count = 0;
     for handle in handles() {

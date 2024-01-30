@@ -25,6 +25,7 @@ use openssl::x509::X509;
 
 use super::{OpensslCertificatePair, OpensslProtocol};
 use crate::net::tls::AlpnProtocol;
+use crate::net::Host;
 
 #[cfg(feature = "tongsuo")]
 use super::OpensslTlcpCertificatePair;
@@ -47,12 +48,25 @@ pub struct OpensslClientConfig {
 }
 
 impl OpensslClientConfig {
-    pub fn build_ssl(&self, tls_name: &str, port: u16) -> anyhow::Result<Ssl> {
+    pub fn build_ssl(&self, tls_name: &Host, port: u16) -> anyhow::Result<Ssl> {
         let mut ssl =
             Ssl::new(&self.ssl_context).map_err(|e| anyhow!("failed to get new Ssl state: {e}"))?;
-        if !self.disable_sni {
-            ssl.set_hostname(tls_name)
-                .map_err(|e| anyhow!("failed to set hostname: {e}"))?;
+        let verify_param = ssl.param_mut();
+        match tls_name {
+            Host::Domain(domain) => {
+                verify_param
+                    .set_host(domain)
+                    .map_err(|e| anyhow!("failed to set cert verify domain: {e}"))?;
+                if !self.disable_sni {
+                    ssl.set_hostname(domain)
+                        .map_err(|e| anyhow!("failed to set sni hostname: {e}"))?;
+                }
+            }
+            Host::Ip(ip) => {
+                verify_param
+                    .set_ip(*ip)
+                    .map_err(|e| anyhow!("failed to set cert verify ip: {e}"))?;
+            }
         }
         if let Some(cache) = &self.session_cache {
             cache.find_and_set_cache(&mut ssl, tls_name, port)?;

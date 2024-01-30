@@ -20,12 +20,14 @@ use std::sync::Arc;
 use ahash::AHashMap;
 use anyhow::anyhow;
 use async_trait::async_trait;
+#[cfg(feature = "quic")]
+use quinn::Connection;
 use slog::Logger;
 use tokio::net::TcpStream;
 use tokio::sync::broadcast;
 
-use g3_daemon::listen::ListenStats;
-use g3_daemon::server::{ClientConnectionInfo, ServerReloadCommand};
+use g3_daemon::listen::{AcceptQuicServer, AcceptTcpServer, ListenStats, ListenTcpRuntime};
+use g3_daemon::server::{BaseServer, ClientConnectionInfo, ServerReloadCommand};
 use g3_types::acl::{AclAction, AclNetworkRule};
 use g3_types::metrics::MetricsName;
 use g3_types::route::HostMatch;
@@ -34,8 +36,7 @@ use super::{CommonTaskContext, RustlsAcceptTask, RustlsHost, RustlsProxyServerSt
 use crate::config::server::rustls_proxy::RustlsProxyServerConfig;
 use crate::config::server::{AnyServerConfig, ServerConfig};
 use crate::serve::{
-    ArcServer, ArcServerStats, ListenTcpRuntime, Server, ServerInternal, ServerQuitPolicy,
-    ServerStats,
+    ArcServer, ArcServerStats, Server, ServerInternal, ServerQuitPolicy, ServerStats, WrapArcServer,
 };
 
 pub(crate) struct RustlsProxyServer {
@@ -89,7 +90,7 @@ impl RustlsProxyServer {
         let server_stats = Arc::new(RustlsProxyServerStats::new(config.name()));
         let listen_stats = Arc::new(ListenStats::new(config.name()));
 
-        let hosts = (&config.hosts).try_into()?;
+        let hosts = config.hosts.try_build_arc(RustlsHost::try_build)?;
 
         let server = RustlsProxyServer::new(config, server_stats, listen_stats, hosts, 1);
         Ok(Arc::new(server))
@@ -108,7 +109,7 @@ impl RustlsProxyServer {
                 let host = if let Some(old_host) = old_hosts_map.get(&name) {
                     old_host.new_for_reload(conf)?
                 } else {
-                    RustlsHost::build_new(conf)?
+                    RustlsHost::try_build(&conf)?
                 };
                 new_hosts_map.insert(name, Arc::new(host));
             }
@@ -200,7 +201,8 @@ impl ServerInternal for RustlsProxyServer {
     }
 
     fn _start_runtime(&self, server: &ArcServer) -> anyhow::Result<()> {
-        let runtime = ListenTcpRuntime::new(server, &*self.config);
+        let runtime =
+            ListenTcpRuntime::new(WrapArcServer(server.clone()), server.get_listen_stats());
         runtime
             .run_all_instances(
                 &self.config.listen,
@@ -216,16 +218,44 @@ impl ServerInternal for RustlsProxyServer {
     }
 }
 
-#[async_trait]
-impl Server for RustlsProxyServer {
+impl BaseServer for RustlsProxyServer {
+    #[inline]
     fn name(&self) -> &MetricsName {
         self.config.name()
     }
 
+    #[inline]
+    fn server_type(&self) -> &'static str {
+        self.config.server_type()
+    }
+
+    #[inline]
     fn version(&self) -> usize {
         self.reload_version
     }
+}
 
+#[async_trait]
+impl AcceptTcpServer for RustlsProxyServer {
+    async fn run_tcp_task(&self, stream: TcpStream, cc_info: ClientConnectionInfo) {
+        let client_addr = cc_info.client_addr();
+        self.server_stats.add_conn(client_addr);
+        if self.drop_early(client_addr) {
+            return;
+        }
+
+        self.run_task(stream, cc_info).await
+    }
+}
+
+#[async_trait]
+impl AcceptQuicServer for RustlsProxyServer {
+    #[cfg(feature = "quic")]
+    async fn run_quic_task(&self, _connection: Connection, _cc_info: ClientConnectionInfo) {}
+}
+
+#[async_trait]
+impl Server for RustlsProxyServer {
     fn get_server_stats(&self) -> Option<ArcServerStats> {
         Some(Arc::clone(&self.server_stats) as _)
     }
@@ -243,13 +273,12 @@ impl Server for RustlsProxyServer {
         &self.quit_policy
     }
 
-    async fn run_tcp_task(&self, stream: TcpStream, cc_info: ClientConnectionInfo) {
-        let client_addr = cc_info.client_addr();
-        self.server_stats.add_conn(client_addr);
-        if self.drop_early(client_addr) {
-            return;
+    fn update_backend(&self, name: &MetricsName) {
+        let host_map = self.hosts.get_all_values();
+        for host in host_map.values() {
+            if host.use_backend(name) {
+                host.update_backends();
+            }
         }
-
-        self.run_task(stream, cc_info).await
     }
 }

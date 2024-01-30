@@ -25,6 +25,3 @@ use stats::OpensslProxyServerStats;
 
 mod host;
 use host::OpensslHost;
-
-mod service;
-use service::OpensslService;
