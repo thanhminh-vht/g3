@@ -27,6 +27,7 @@ members = [
     "lib/g3-icap-client",
     "lib/g3-socks",
     "lib/g3-dpi",
+    "lib/g3-udpdump",
     "lib/g3-tls-cert",
     "lib/g3-slog-types",
     "lib/g3-geoip",
@@ -120,10 +121,10 @@ idna = "0.5"
 url = "2.1"
 mime = "0.3"
 percent-encoding = "2.1"
-http = "0.2.9"
-h2 = "0.3.21"
-h3-quinn = "0.0.4"
-h3 = "0.0.3"
+http = "1.0"
+h2 = "0.4"
+h3-quinn = "0.0.5"
+h3 = "0.0.4"
 #
 log = "0.4"
 slog = "2"
@@ -143,8 +144,8 @@ pin-project = "1.1"
 #
 rustls = "0.21.5"
 tokio-rustls = "0.24"
-openssl = { package = "variant-ssl", version = "0.11.0" }
-openssl-sys = { package = "variant-ssl-sys", version = "0.10.0" }
+openssl = { package = "variant-ssl", version = "0.11.3" }
+openssl-sys = { package = "variant-ssl-sys", version = "0.10.3" }
 openssl-probe = "0.1"
 rustls-pemfile = "1.0"
 rustls-native-certs = "0.6"
@@ -159,9 +160,9 @@ hickory-resolver = { version = "0.24.0", default-features = false }
 hickory-proto = { version = "0.24.0", default-features = false }
 hickory-client = { version = "0.24.0", default-features = false }
 #
-capnp-rpc = "0.18"
-capnp = "0.18"
-capnpc = "0.18"
+capnp-rpc = "0.19"
+capnp = "0.19"
+capnpc = "0.19"
 #
 libc = "0.2.147"
 nix = { version = "0.27", default-features = false }
@@ -191,6 +192,7 @@ g3-daemon = { version = "0.1", path = "lib/g3-daemon" }
 g3-ctl = { version = "0.1", path = "lib/g3-ctl" }
 g3-datetime = { version = "0.1", path = "lib/g3-datetime" }
 g3-dpi = { version = "0.1", path = "lib/g3-dpi" }
+g3-udpdump = { version = "0.1", path = "lib/g3-udpdump" }
 g3-fluentd = { version = "0.1", path = "lib/g3-fluentd" }
 g3-ftp-client = { version = "0.3", path = "lib/g3-ftp-client" }
 g3-h2 = { version = "0.1", path = "lib/g3-h2" }
@@ -213,7 +215,7 @@ g3-syslog = { version = "0.6", path = "lib/g3-syslog" }
 g3-slog-types = { version = "0.1", path = "lib/g3-slog-types" }
 g3-geoip = { version = "0.1", path = "lib/g3-geoip" }
 g3-tls-cert = { version = "0.4", path = "lib/g3-tls-cert" }
-g3-types = { version = "0.3", path = "lib/g3-types" }
+g3-types = { version = "0.4", path = "lib/g3-types" }
 g3-xcrypt = { version = "0.1", path = "lib/g3-xcrypt" }
 g3-yaml = { version = "0.5.0", path = "lib/g3-yaml" }
 
@@ -228,6 +230,5 @@ debug = 1
 debug-assertions = false
 
 [patch.crates-io]
-console = { version = "0.15.7", git = "https://github.com/console-rs/console.git", rev = "51425fc" }
 quinn-proto = { version = "0.10.6", git = "https://github.com/zh-jq/quinn.git", branch = "ring-0.17" }
 hickory-proto = { version = "0.24.0", git = "https://github.com/hickory-dns/hickory-dns.git", rev = "b0c0566" }

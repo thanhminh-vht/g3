@@ -22,23 +22,27 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use log::warn;
 use openssl::ex_data::Index;
+#[cfg(feature = "vendored-tongsuo")]
+use openssl::ssl::SslVersion;
 use openssl::ssl::{Ssl, SslContext};
+#[cfg(feature = "quic")]
+use quinn::Connection;
 use slog::Logger;
 use tokio::net::TcpStream;
 use tokio::sync::broadcast;
 
-use g3_daemon::listen::ListenStats;
-use g3_daemon::server::{ClientConnectionInfo, ServerReloadCommand};
+use g3_daemon::listen::{AcceptQuicServer, AcceptTcpServer, ListenStats, ListenTcpRuntime};
+use g3_daemon::server::{BaseServer, ClientConnectionInfo, ServerReloadCommand};
 use g3_types::acl::{AclAction, AclNetworkRule};
 use g3_types::metrics::MetricsName;
+use g3_types::net::Host;
 use g3_types::route::HostMatch;
 
 use super::{CommonTaskContext, OpensslAcceptTask, OpensslHost, OpensslProxyServerStats};
 use crate::config::server::openssl_proxy::OpensslProxyServerConfig;
 use crate::config::server::{AnyServerConfig, ServerConfig};
 use crate::serve::{
-    ArcServer, ArcServerStats, ListenTcpRuntime, Server, ServerInternal, ServerQuitPolicy,
-    ServerStats,
+    ArcServer, ArcServerStats, Server, ServerInternal, ServerQuitPolicy, ServerStats, WrapArcServer,
 };
 
 pub(crate) struct OpensslProxyServer {
@@ -49,10 +53,10 @@ pub(crate) struct OpensslProxyServer {
     reload_sender: broadcast::Sender<ServerReloadCommand>,
     task_logger: Logger,
     hosts: Arc<HostMatch<Arc<OpensslHost>>>,
-    host_index: Index<Ssl, Arc<OpensslHost>>,
-    ssl_accept_context: SslContext,
     #[cfg(feature = "vendored-tongsuo")]
-    tlcp_accept_context: SslContext,
+    client_hello_version_index: Index<Ssl, SslVersion>,
+    host_name_index: Index<Ssl, Host>,
+    lazy_ssl_context: SslContext,
 
     quit_policy: Arc<ServerQuitPolicy>,
     reload_version: usize,
@@ -68,27 +72,16 @@ impl OpensslProxyServer {
     ) -> anyhow::Result<Self> {
         let reload_sender = crate::serve::new_reload_notify_channel();
 
-        let host_index =
-            Ssl::new_ex_index().map_err(|e| anyhow!("failed to get host index: {e}"))?;
-        let sema_index =
-            Ssl::new_ex_index().map_err(|e| anyhow!("failed to get sema index: {e}"))?;
-        let ssl_acceptor = super::host::build_ssl_acceptor(
-            hosts.clone(),
-            host_index,
-            sema_index,
-            config.alert_unrecognized_name,
-        )?;
-        let ssl_accept_context = ssl_acceptor.into_context();
-        let _ = Ssl::new(&ssl_accept_context)
-            .map_err(|e| anyhow!("unable build ssl context for real connections: {e}"))?;
-
+        let host_name_index =
+            Ssl::new_ex_index().map_err(|e| anyhow!("failed to create ex index: {e}"))?;
         #[cfg(feature = "vendored-tongsuo")]
-        let tlcp_accept_context = super::host::build_tlcp_context(
-            hosts.clone(),
-            host_index,
-            sema_index,
-            config.alert_unrecognized_name,
-        )?;
+        let client_hello_version_index =
+            Ssl::new_ex_index().map_err(|e| anyhow!("failed to create ex index: {e}"))?;
+        #[cfg(feature = "vendored-tongsuo")]
+        let lazy_ssl_context =
+            super::host::build_lazy_ssl_context(client_hello_version_index, host_name_index)?;
+        #[cfg(not(feature = "vendored-tongsuo"))]
+        let lazy_ssl_context = super::host::build_lazy_ssl_context(host_name_index)?;
 
         let ingress_net_filter = config
             .ingress_net_filter
@@ -108,10 +101,10 @@ impl OpensslProxyServer {
             reload_sender,
             task_logger,
             hosts,
-            host_index,
-            ssl_accept_context,
             #[cfg(feature = "vendored-tongsuo")]
-            tlcp_accept_context,
+            client_hello_version_index,
+            host_name_index,
+            lazy_ssl_context,
             quit_policy: Arc::new(ServerQuitPolicy::default()),
             reload_version: version,
         })
@@ -122,7 +115,7 @@ impl OpensslProxyServer {
         let server_stats = Arc::new(OpensslProxyServerStats::new(config.name()));
         let listen_stats = Arc::new(ListenStats::new(config.name()));
 
-        let hosts = (&config.hosts).try_into()?;
+        let hosts = config.hosts.try_build_arc(OpensslHost::try_build)?;
 
         let server =
             OpensslProxyServer::new(config, server_stats, listen_stats, Arc::new(hosts), 1)?;
@@ -142,7 +135,7 @@ impl OpensslProxyServer {
                 let host = if let Some(old_host) = old_hosts_map.get(&name) {
                     old_host.new_for_reload(conf)?
                 } else {
-                    OpensslHost::build_new(conf)?
+                    OpensslHost::try_build(&conf)?
                 };
                 new_hosts_map.insert(name, Arc::new(host));
             }
@@ -182,62 +175,13 @@ impl OpensslProxyServer {
         false
     }
 
-    #[cfg(feature = "vendored-tongsuo")]
-    async fn build_ssl(&self, stream: &TcpStream) -> Result<Ssl, ()> {
-        let mut buf = [0u8; 3];
-        let ssl =
-            match tokio::time::timeout(self.config.accept_timeout, stream.peek(&mut buf)).await {
-                Ok(Ok(3)) => {
-                    if buf[0] != 0x16 {
-                        // invalid data, may be attack
-                        self.listen_stats.add_dropped();
-                        return Err(());
-                    }
-                    if buf[1] == 0x01 && buf[2] == 0x01 {
-                        Ssl::new(&self.tlcp_accept_context)
-                    } else {
-                        Ssl::new(&self.ssl_accept_context)
-                    }
-                }
-                Ok(Ok(_n)) => {
-                    // no enough data, may be attack
-                    self.listen_stats.add_dropped();
-                    return Err(());
-                }
-                Ok(Err(_e)) => {
-                    // connection closed, may be attack
-                    self.listen_stats.add_dropped();
-                    return Err(());
-                }
-                Err(_) => {
-                    // timeout, may be attack
-                    self.listen_stats.add_dropped();
-                    return Err(());
-                }
-            };
-        match ssl {
-            Ok(v) => Ok(v),
-            Err(e) => {
-                warn!("failed to build ssl context when accepting connections: {e}");
-                self.listen_stats.add_dropped();
-                Err(())
-            }
-        }
-    }
-
     async fn run_task(&self, stream: TcpStream, cc_info: ClientConnectionInfo) {
-        #[cfg(not(feature = "vendored-tongsuo"))]
-        let ssl = match Ssl::new(&self.ssl_accept_context) {
+        let ssl = match Ssl::new(&self.lazy_ssl_context) {
             Ok(v) => v,
             Err(e) => {
                 warn!("failed to build ssl context when accepting connections: {e}");
                 return;
             }
-        };
-        #[cfg(feature = "vendored-tongsuo")]
-        let Ok(ssl) = self.build_ssl(&stream).await
-        else {
-            return;
         };
 
         let ctx = CommonTaskContext {
@@ -246,15 +190,19 @@ impl OpensslProxyServer {
             server_quit_policy: Arc::clone(&self.quit_policy),
             cc_info,
             task_logger: self.task_logger.clone(),
+
+            #[cfg(feature = "vendored-tongsuo")]
+            client_hello_version_index: self.client_hello_version_index,
+            host_name_index: self.host_name_index,
         };
 
         if self.config.spawn_task_unconstrained {
             tokio::task::unconstrained(
-                OpensslAcceptTask::new(ctx, self.host_index).into_running(stream, ssl),
+                OpensslAcceptTask::new(ctx, self.hosts.clone()).into_running(stream, ssl),
             )
             .await
         } else {
-            OpensslAcceptTask::new(ctx, self.host_index)
+            OpensslAcceptTask::new(ctx, self.hosts.clone())
                 .into_running(stream, ssl)
                 .await;
         }
@@ -293,7 +241,8 @@ impl ServerInternal for OpensslProxyServer {
     }
 
     fn _start_runtime(&self, server: &ArcServer) -> anyhow::Result<()> {
-        let runtime = ListenTcpRuntime::new(server, &*self.config);
+        let runtime =
+            ListenTcpRuntime::new(WrapArcServer(server.clone()), server.get_listen_stats());
         runtime
             .run_all_instances(
                 &self.config.listen,
@@ -309,16 +258,44 @@ impl ServerInternal for OpensslProxyServer {
     }
 }
 
-#[async_trait]
-impl Server for OpensslProxyServer {
+impl BaseServer for OpensslProxyServer {
+    #[inline]
     fn name(&self) -> &MetricsName {
         self.config.name()
     }
 
+    #[inline]
+    fn server_type(&self) -> &'static str {
+        self.config.server_type()
+    }
+
+    #[inline]
     fn version(&self) -> usize {
         self.reload_version
     }
+}
 
+#[async_trait]
+impl AcceptTcpServer for OpensslProxyServer {
+    async fn run_tcp_task(&self, stream: TcpStream, cc_info: ClientConnectionInfo) {
+        let client_addr = cc_info.client_addr();
+        self.server_stats.add_conn(client_addr);
+        if self.drop_early(client_addr) {
+            return;
+        }
+
+        self.run_task(stream, cc_info).await
+    }
+}
+
+#[async_trait]
+impl AcceptQuicServer for OpensslProxyServer {
+    #[cfg(feature = "quic")]
+    async fn run_quic_task(&self, _connection: Connection, _cc_info: ClientConnectionInfo) {}
+}
+
+#[async_trait]
+impl Server for OpensslProxyServer {
     fn get_server_stats(&self) -> Option<ArcServerStats> {
         Some(Arc::clone(&self.server_stats) as _)
     }
@@ -336,13 +313,12 @@ impl Server for OpensslProxyServer {
         &self.quit_policy
     }
 
-    async fn run_tcp_task(&self, stream: TcpStream, cc_info: ClientConnectionInfo) {
-        let client_addr = cc_info.client_addr();
-        self.server_stats.add_conn(client_addr);
-        if self.drop_early(client_addr) {
-            return;
+    fn update_backend(&self, name: &MetricsName) {
+        let host_map = self.hosts.get_all_values();
+        for host in host_map.values() {
+            if host.use_backend(name) {
+                host.update_backends();
+            }
         }
-
-        self.run_task(stream, cc_info).await
     }
 }

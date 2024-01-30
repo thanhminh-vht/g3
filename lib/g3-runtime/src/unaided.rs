@@ -24,7 +24,9 @@ use tokio::sync::{oneshot, watch};
 
 use g3_compat::CpuAffinity;
 
-pub struct WorkersGuard(watch::Sender<()>);
+pub struct WorkersGuard {
+    _close_sender: watch::Sender<()>,
+}
 
 pub struct UnaidedRuntimeConfig {
     thread_number: Option<NonZeroUsize>,
@@ -73,7 +75,8 @@ impl UnaidedRuntimeConfig {
         target_os = "linux",
         target_os = "android",
         target_os = "freebsd",
-        target_os = "netbsd"
+        target_os = "dragonfly",
+        target_os = "netbsd",
     ))]
     pub fn set_mapped_sched_affinity(&mut self) -> anyhow::Result<()> {
         let n = self.num_threads();
@@ -191,7 +194,9 @@ impl UnaidedRuntimeConfig {
             }
         }
 
-        Ok(WorkersGuard(close_w))
+        Ok(WorkersGuard {
+            _close_sender: close_w,
+        })
     }
 
     fn num_threads(&self) -> usize {

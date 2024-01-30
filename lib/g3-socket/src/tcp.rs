@@ -35,6 +35,10 @@ pub fn new_std_listener(config: &TcpListenConfig) -> io::Result<std::net::TcpLis
     if config.is_ipv6only() {
         socket.set_only_v6(true)?;
     }
+    #[cfg(target_os = "linux")]
+    if config.transparent() {
+        socket.set_ip_transparent(true)?;
+    }
     let bind_addr: SockAddr = addr.into();
     socket.bind(&bind_addr)?;
     socket.listen(config.backlog() as i32)?;
@@ -124,7 +128,9 @@ fn new_tcp_socket(family: AddressFamily) -> io::Result<Socket> {
     target_os = "linux",
     target_os = "android",
     target_os = "freebsd",
-    target_os = "netbsd"
+    target_os = "dragonfly",
+    target_os = "netbsd",
+    target_os = "openbsd",
 ))]
 fn new_tcp_socket(family: AddressFamily) -> io::Result<Socket> {
     Socket::new(Domain::from(family), Type::STREAM.nonblocking(), None)

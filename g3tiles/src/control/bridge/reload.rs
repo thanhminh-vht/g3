@@ -36,3 +36,5 @@ macro_rules! impl_reload {
 }
 
 impl_reload!(reload_server, serve);
+impl_reload!(reload_discover, discover);
+impl_reload!(reload_backend, backend);

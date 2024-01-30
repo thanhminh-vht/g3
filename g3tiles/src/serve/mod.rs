@@ -17,11 +17,15 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+#[cfg(feature = "quic")]
+use quinn::Connection;
 use tokio::net::TcpStream;
 use tokio::sync::broadcast;
 
-use g3_daemon::listen::ListenStats;
-use g3_daemon::server::{ClientConnectionInfo, ServerQuitPolicy, ServerReloadCommand};
+use g3_daemon::listen::{
+    AcceptQuicServer, AcceptTcpServer, ListenStats, ReloadQuicServer, ReloadTcpServer,
+};
+use g3_daemon::server::{BaseServer, ClientConnectionInfo, ServerQuitPolicy, ServerReloadCommand};
 use g3_types::metrics::MetricsName;
 
 use crate::config::server::AnyServerConfig;
@@ -32,9 +36,6 @@ pub(crate) use registry::{foreach_online as foreach_server, get_names, get_or_in
 mod error;
 pub(crate) use error::{ServerTaskError, ServerTaskResult};
 
-mod runtime;
-use runtime::ListenTcpRuntime;
-
 mod dummy_close;
 mod plain_tcp_port;
 
@@ -44,7 +45,7 @@ mod rustls_proxy;
 mod ops;
 pub(crate) use ops::{
     force_quit_offline_server, force_quit_offline_servers, get_server, reload, stop_all,
-    wait_all_tasks,
+    update_dependency_to_backend, wait_all_tasks,
 };
 pub use ops::{spawn_all, spawn_offline_clean};
 
@@ -70,10 +71,9 @@ pub(crate) trait ServerInternal {
 }
 
 #[async_trait]
-pub(crate) trait Server: ServerInternal {
-    fn name(&self) -> &MetricsName;
-    fn version(&self) -> usize;
-
+pub(crate) trait Server:
+    ServerInternal + BaseServer + AcceptTcpServer + AcceptQuicServer
+{
     fn get_server_stats(&self) -> Option<ArcServerStats> {
         None
     }
@@ -82,10 +82,54 @@ pub(crate) trait Server: ServerInternal {
     fn alive_count(&self) -> i32;
     fn quit_policy(&self) -> &Arc<ServerQuitPolicy>;
 
-    async fn run_tcp_task(&self, stream: TcpStream, cc_info: ClientConnectionInfo);
+    fn update_backend(&self, name: &MetricsName);
 }
 
 pub(crate) type ArcServer = Arc<dyn Server + Send + Sync>;
+
+#[derive(Clone)]
+struct WrapArcServer(ArcServer);
+
+impl BaseServer for WrapArcServer {
+    fn name(&self) -> &MetricsName {
+        self.0.name()
+    }
+
+    fn server_type(&self) -> &'static str {
+        self.0.server_type()
+    }
+
+    fn version(&self) -> usize {
+        self.0.version()
+    }
+}
+
+#[async_trait]
+impl AcceptTcpServer for WrapArcServer {
+    async fn run_tcp_task(&self, stream: TcpStream, cc_info: ClientConnectionInfo) {
+        self.0.run_tcp_task(stream, cc_info).await
+    }
+}
+
+impl ReloadTcpServer for WrapArcServer {
+    fn get_reloaded(&self) -> Self {
+        WrapArcServer(get_or_insert_default(self.name()))
+    }
+}
+
+#[async_trait]
+impl AcceptQuicServer for WrapArcServer {
+    #[cfg(feature = "quic")]
+    async fn run_quic_task(&self, connection: Connection, cc_info: ClientConnectionInfo) {
+        self.0.run_quic_task(connection, cc_info).await
+    }
+}
+
+impl ReloadQuicServer for WrapArcServer {
+    fn get_reloaded(&self) -> Self {
+        WrapArcServer(get_or_insert_default(self.name()))
+    }
+}
 
 fn new_reload_notify_channel() -> broadcast::Sender<ServerReloadCommand> {
     broadcast::Sender::new(16)

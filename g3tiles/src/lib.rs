@@ -14,8 +14,10 @@
  * limitations under the License.
  */
 
+pub mod backend;
 pub mod config;
 pub mod control;
+pub mod discover;
 pub mod opts;
 pub mod serve;
 pub mod signal;
@@ -23,3 +25,4 @@ pub mod stat;
 
 mod build;
 mod log;
+mod module;

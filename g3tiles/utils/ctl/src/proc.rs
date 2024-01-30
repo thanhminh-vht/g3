@@ -33,8 +33,12 @@ pub const COMMAND_LIST: &str = "list";
 
 const COMMAND_LIST_ARG_RESOURCE: &str = "resource";
 const RESOURCE_VALUE_SERVER: &str = "server";
+const RESOURCE_VALUE_DISCOVER: &str = "discover";
+const RESOURCE_VALUE_BACKEND: &str = "backend";
 
 pub const COMMAND_RELOAD_SERVER: &str = "reload-server";
+pub const COMMAND_RELOAD_DISCOVER: &str = "reload-discover";
+pub const COMMAND_RELOAD_BACKEND: &str = "reload-backend";
 
 const SUBCOMMAND_ARG_NAME: &str = "name";
 
@@ -65,13 +69,27 @@ pub mod commands {
             Arg::new(COMMAND_LIST_ARG_RESOURCE)
                 .required(true)
                 .num_args(1)
-                .value_parser([RESOURCE_VALUE_SERVER])
+                .value_parser([
+                    RESOURCE_VALUE_SERVER,
+                    RESOURCE_VALUE_DISCOVER,
+                    RESOURCE_VALUE_BACKEND,
+                ])
                 .ignore_case(true),
         )
     }
 
     pub fn reload_server() -> Command {
         Command::new(COMMAND_RELOAD_SERVER)
+            .arg(Arg::new(SUBCOMMAND_ARG_NAME).required(true).num_args(1))
+    }
+
+    pub fn reload_discover() -> Command {
+        Command::new(COMMAND_RELOAD_DISCOVER)
+            .arg(Arg::new(SUBCOMMAND_ARG_NAME).required(true).num_args(1))
+    }
+
+    pub fn reload_backend() -> Command {
+        Command::new(COMMAND_RELOAD_BACKEND)
             .arg(Arg::new(SUBCOMMAND_ARG_NAME).required(true).num_args(1))
     }
 }
@@ -91,7 +109,7 @@ pub async fn offline(client: &proc_control::Client) -> CommandResult<()> {
 pub async fn force_quit(client: &proc_control::Client, args: &ArgMatches) -> CommandResult<()> {
     let name = args.get_one::<String>(SUBCOMMAND_ARG_NAME).unwrap();
     let mut req = client.force_quit_offline_server_request();
-    req.get().set_name(name.as_str().into());
+    req.get().set_name(name);
     let rsp = req.send().promise.await?;
     parse_operation_result(rsp.get()?.get_result()?)
 }
@@ -109,6 +127,8 @@ pub async fn list(client: &proc_control::Client, args: &ArgMatches) -> CommandRe
         .as_str()
     {
         RESOURCE_VALUE_SERVER => list_server(client).await,
+        RESOURCE_VALUE_DISCOVER => list_discover(client).await,
+        RESOURCE_VALUE_BACKEND => list_backend(client).await,
         _ => unreachable!(),
     }
 }
@@ -119,10 +139,41 @@ async fn list_server(client: &proc_control::Client) -> CommandResult<()> {
     g3_ctl::print_result_list(rsp.get()?.get_result()?)
 }
 
+async fn list_discover(client: &proc_control::Client) -> CommandResult<()> {
+    let req = client.list_discover_request();
+    let rsp = req.send().promise.await?;
+    g3_ctl::print_result_list(rsp.get()?.get_result()?)
+}
+
+async fn list_backend(client: &proc_control::Client) -> CommandResult<()> {
+    let req = client.list_backend_request();
+    let rsp = req.send().promise.await?;
+    g3_ctl::print_result_list(rsp.get()?.get_result()?)
+}
+
 pub async fn reload_server(client: &proc_control::Client, args: &ArgMatches) -> CommandResult<()> {
     let name = args.get_one::<String>(SUBCOMMAND_ARG_NAME).unwrap();
     let mut req = client.reload_server_request();
-    req.get().set_name(name.as_str().into());
+    req.get().set_name(name);
+    let rsp = req.send().promise.await?;
+    parse_operation_result(rsp.get()?.get_result()?)
+}
+
+pub async fn reload_discover(
+    client: &proc_control::Client,
+    args: &ArgMatches,
+) -> CommandResult<()> {
+    let name = args.get_one::<String>(SUBCOMMAND_ARG_NAME).unwrap();
+    let mut req = client.reload_discover_request();
+    req.get().set_name(name);
+    let rsp = req.send().promise.await?;
+    parse_operation_result(rsp.get()?.get_result()?)
+}
+
+pub async fn reload_backend(client: &proc_control::Client, args: &ArgMatches) -> CommandResult<()> {
+    let name = args.get_one::<String>(SUBCOMMAND_ARG_NAME).unwrap();
+    let mut req = client.reload_backend_request();
+    req.get().set_name(name);
     let rsp = req.send().promise.await?;
     parse_operation_result(rsp.get()?.get_result()?)
 }
@@ -132,7 +183,7 @@ pub(crate) async fn get_server(
     name: &str,
 ) -> CommandResult<server_control::Client> {
     let mut req = client.get_server_request();
-    req.get().set_name(name.into());
+    req.get().set_name(name);
     let rsp = req.send().promise.await?;
     parse_fetch_result(rsp.get()?.get_server()?)
 }

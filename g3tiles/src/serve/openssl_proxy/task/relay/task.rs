@@ -17,7 +17,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::anyhow;
 use log::debug;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::Instant;
@@ -25,38 +24,43 @@ use tokio::time::Instant;
 use g3_daemon::stat::task::{TcpStreamConnectionStats, TcpStreamTaskStats};
 use g3_io_ext::{LimitedCopy, LimitedCopyConfig, LimitedCopyError, LimitedStream};
 use g3_openssl::SslStream;
+use g3_types::limit::GaugeSemaphorePermit;
 
 use super::{CommonTaskContext, OpensslRelayTaskCltWrapperStats};
+use crate::backend::ArcBackend;
 use crate::config::server::ServerConfig;
 use crate::log::task::tcp_connect::TaskLogForTcpConnect;
-use crate::serve::openssl_proxy::{OpensslHost, OpensslService};
+use crate::serve::openssl_proxy::OpensslHost;
 use crate::serve::{ServerTaskError, ServerTaskNotes, ServerTaskResult, ServerTaskStage};
 
 pub(crate) struct OpensslRelayTask {
     ctx: CommonTaskContext,
     host: Arc<OpensslHost>,
-    service: Arc<OpensslService>,
+    backend: ArcBackend,
     task_notes: ServerTaskNotes,
     task_stats: Arc<TcpStreamTaskStats>,
+    alive_permit: Option<GaugeSemaphorePermit>,
 }
 
 impl OpensslRelayTask {
     pub(crate) fn new(
         ctx: CommonTaskContext,
         host: Arc<OpensslHost>,
-        service: Arc<OpensslService>,
+        backend: ArcBackend,
         wait_time: Duration,
         pre_handshake_stats: Arc<TcpStreamConnectionStats>,
+        alive_permit: Option<GaugeSemaphorePermit>,
     ) -> Self {
         let task_notes = ServerTaskNotes::new(ctx.cc_info.clone(), wait_time);
         OpensslRelayTask {
             ctx,
             host,
-            service,
+            backend,
             task_notes,
             task_stats: Arc::new(TcpStreamTaskStats::with_clt_stats(
                 pre_handshake_stats.as_ref().clone(),
             )),
+            alive_permit,
         }
     }
 
@@ -93,7 +97,10 @@ impl OpensslRelayTask {
         self.ctx.server_stats.inc_alive_task();
     }
 
-    fn pre_stop(&self) {
+    fn pre_stop(&mut self) {
+        if let Some(permit) = self.alive_permit.take() {
+            drop(permit);
+        }
         self.ctx.server_stats.dec_alive_task();
     }
 
@@ -111,22 +118,9 @@ impl OpensslRelayTask {
                 ServerTaskError::InternalServerError("failed to set client socket options")
             })?;
 
-        let next_addr = self.service.select_addr(self.ctx.client_ip());
-
         self.task_notes.stage = ServerTaskStage::Connecting;
 
-        let socket = g3_socket::tcp::new_socket_to(
-            next_addr.ip(),
-            None,
-            &Default::default(),
-            &Default::default(),
-            true,
-        )
-        .map_err(|e| ServerTaskError::UnclassifiedError(anyhow!("setup socket failed: {e:?}")))?;
-        let stream = socket.connect(next_addr).await.map_err(|e| {
-            ServerTaskError::UnclassifiedError(anyhow!("failed to connect to {next_addr}: {e:?}"))
-        })?;
-        let (ups_r, ups_w) = stream.into_split();
+        let (ups_r, ups_w) = self.backend.stream_connect(&self.task_notes).await?;
 
         self.task_notes.stage = ServerTaskStage::Connected;
 
