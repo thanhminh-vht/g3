@@ -302,6 +302,52 @@ The map is consists of the following fields:
 
   **default**: 16
 
+* supported_groups
+
+  **optional**, **type**: str
+
+  Set the supported elliptic curve groups.
+
+  **default**: not set
+
+  .. versionadded:: 1.7.35
+
+* use_ocsp_stapling
+
+  **optional**, **type**: bool
+
+  Set this to true to request a stapled OCSP response from the server.
+
+  Verify of this response is still not implemented.
+
+  **default**: not set, the default value may vary between different OpenSSL variants
+
+  .. versionadded:: 1.7.35
+
+* enable_sct
+
+  **optional**, **type**: bool
+
+  Enable the processing of signed certificate timestamps (SCTs) for OpenSSL, or enables SCT requests for BoringSSL.
+
+  Verify of this response is still not implemented for BoringSSL variants.
+
+  **default**: not set, the default value may vary between different OpenSSL variants
+
+  .. versionadded:: 1.7.35
+
+* enable_grease
+
+  **optional**, **type**: bool
+
+  Enable GREASE. See `RFC 8701`_.
+
+  **default**: not set, the default value may vary between different OpenSSL variants
+
+  .. versionadded:: 1.7.35
+
+  .. _RFC 8701: https://datatracker.ietf.org/doc/rfc8701/
+
 .. versionadded:: 1.1.4
 
 .. _conf_value_openssl_server_config:

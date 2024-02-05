@@ -271,6 +271,22 @@ fn set_openssl_tls_client_config_builder(
                         .context(format!("invalid usize value for key {k}"))?;
                     builder.set_session_cache_each_capacity(cap);
                 }
+                "supported_groups" => {
+                    let groups = crate::value::as_string(v)?;
+                    builder.set_supported_groups(groups);
+                }
+                "use_ocsp_stapling" => {
+                    let enable = crate::value::as_bool(v)?;
+                    builder.set_use_ocsp_stapling(enable);
+                }
+                "enable_sct" => {
+                    let enable = crate::value::as_bool(v)?;
+                    builder.set_enable_sct(enable);
+                }
+                "enable_grease" => {
+                    let enable = crate::value::as_bool(v)?;
+                    builder.set_enable_grease(enable);
+                }
                 _ => return Err(anyhow!("invalid key {k}")),
             }
         }

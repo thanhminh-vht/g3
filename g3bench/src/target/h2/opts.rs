@@ -289,7 +289,8 @@ impl BenchH2Args {
 
         let mut client_builder = h2::client::Builder::new();
         client_builder.max_concurrent_streams(0).enable_push(false);
-        let (h2s, h2s_connection) = h2::client::handshake(stream)
+        let (h2s, h2s_connection) = client_builder
+            .handshake(stream)
             .await
             .map_err(|e| anyhow!("h2 handshake failed: {e:?}"))?;
         tokio::spawn(async move {
@@ -342,10 +343,6 @@ impl BenchH2Args {
             .build()
             .map_err(|e| anyhow!("failed to build request: {e:?}"))?;
 
-        let host_str = self.host.to_string();
-        let host =
-            HeaderValue::from_str(&host_str).map_err(|e| anyhow!("invalid host value: {e:?}"))?;
-
         let auth = match &self.auth {
             HttpAuth::None => None,
             HttpAuth::Basic(basic) => {
@@ -359,7 +356,6 @@ impl BenchH2Args {
         Ok(H2PreRequest {
             method: self.method.clone(),
             uri,
-            host,
             auth,
         })
     }

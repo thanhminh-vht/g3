@@ -17,7 +17,11 @@
 use std::time::Duration;
 
 use anyhow::anyhow;
+#[cfg(any(feature = "aws-lc", feature = "boringssl", feature = "tongsuo"))]
+use openssl::ssl::CertCompressionAlgorithm;
 use openssl::ssl::{Ssl, SslConnector, SslContext, SslMethod, SslVerifyMode};
+#[cfg(not(any(feature = "aws-lc", feature = "boringssl")))]
+use openssl::ssl::{SslCtValidationMode, StatusType};
 use openssl::x509::store::X509StoreBuilder;
 use openssl::x509::X509;
 
@@ -75,6 +79,11 @@ pub struct OpensslInterceptionClientConfigBuilder {
     no_default_ca_certs: bool,
     handshake_timeout: Duration,
     session_cache: OpensslSessionCacheConfig,
+    supported_groups: String,
+    use_ocsp_stapling: bool,
+    enable_sct: bool,
+    #[cfg(any(feature = "aws-lc", feature = "boringssl"))]
+    enable_grease: bool,
 }
 
 impl Default for OpensslInterceptionClientConfigBuilder {
@@ -84,6 +93,11 @@ impl Default for OpensslInterceptionClientConfigBuilder {
             no_default_ca_certs: false,
             handshake_timeout: DEFAULT_HANDSHAKE_TIMEOUT,
             session_cache: OpensslSessionCacheConfig::default(),
+            supported_groups: String::default(),
+            use_ocsp_stapling: false,
+            enable_sct: false,
+            #[cfg(any(feature = "aws-lc", feature = "boringssl"))]
+            enable_grease: false,
         }
     }
 }
@@ -132,10 +146,78 @@ impl OpensslInterceptionClientConfigBuilder {
         self.session_cache.set_each_capacity(cap);
     }
 
+    #[inline]
+    pub fn set_supported_groups(&mut self, groups: String) {
+        self.supported_groups = groups;
+    }
+
+    #[inline]
+    pub fn set_use_ocsp_stapling(&mut self, enable: bool) {
+        self.use_ocsp_stapling = enable;
+    }
+
+    #[inline]
+    pub fn set_enable_sct(&mut self, enable: bool) {
+        self.enable_sct = enable;
+    }
+
+    #[inline]
+    #[cfg(any(feature = "aws-lc", feature = "boringssl"))]
+    pub fn set_enable_grease(&mut self, enable: bool) {
+        self.enable_grease = enable;
+    }
+
+    #[cfg(not(any(feature = "aws-lc", feature = "boringssl")))]
+    pub fn set_enable_grease(&mut self, _enable: bool) {
+        log::warn!("grease can only be set for BoringSSL variants");
+    }
+
     pub fn build(&self) -> anyhow::Result<OpensslInterceptionClientConfig> {
         let mut ctx_builder = SslConnector::builder(SslMethod::tls_client())
             .map_err(|e| anyhow!("failed to create ssl context builder: {e}"))?;
         ctx_builder.set_verify(SslVerifyMode::PEER);
+
+        if !self.supported_groups.is_empty() {
+            ctx_builder
+                .set_groups_list(&self.supported_groups)
+                .map_err(|e| anyhow!("failed to set supported elliptic curve groups: {e}"))?;
+        }
+
+        if self.use_ocsp_stapling {
+            #[cfg(not(any(feature = "aws-lc", feature = "boringssl")))]
+            ctx_builder
+                .set_status_type(StatusType::OCSP)
+                .map_err(|e| anyhow!("failed to enable OCSP status request: {e}"))?;
+            #[cfg(any(feature = "aws-lc", feature = "boringssl"))]
+            ctx_builder.enable_ocsp_stapling();
+            // TODO check OCSP response
+        }
+
+        if self.enable_sct {
+            #[cfg(not(any(feature = "aws-lc", feature = "boringssl")))]
+            ctx_builder
+                .enable_ct(SslCtValidationMode::PERMISSIVE)
+                .map_err(|e| anyhow!("failed to enable SCT: {e}"))?;
+            #[cfg(any(feature = "aws-lc", feature = "boringssl"))]
+            ctx_builder.enable_signed_cert_timestamps();
+            // TODO check SCT list for AWS-LC or BoringSSL
+        }
+
+        #[cfg(any(feature = "aws-lc", feature = "boringssl"))]
+        if self.enable_grease {
+            ctx_builder.set_grease_enabled(true);
+        }
+
+        #[cfg(any(feature = "aws-lc", feature = "boringssl", feature = "tongsuo"))]
+        ctx_builder
+            .add_cert_decompression_alg(CertCompressionAlgorithm::BROTLI, |in_buf, out_buf| {
+                use std::io::Read;
+
+                brotli::Decompressor::new(in_buf, 4096)
+                    .read(out_buf)
+                    .unwrap_or(0)
+            })
+            .map_err(|e| anyhow!("failed to set cert decompression algorithm: {e}"))?;
 
         let mut store_builder = X509StoreBuilder::new()
             .map_err(|e| anyhow!("failed to create ca cert store builder: {e}"))?;
@@ -150,9 +232,12 @@ impl OpensslInterceptionClientConfigBuilder {
                 .add_cert(ca_cert)
                 .map_err(|e| anyhow!("failed to add ca certificate #{i}: {e}"))?;
         }
+        #[cfg(not(feature = "boringssl"))]
         ctx_builder
             .set_verify_cert_store(store_builder.build())
             .map_err(|e| anyhow!("failed to set ca certs: {e}"))?;
+        #[cfg(feature = "boringssl")]
+        ctx_builder.set_cert_store(store_builder.build());
 
         let session_cache = self.session_cache.set_for_client(&mut ctx_builder)?;
 
