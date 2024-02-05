@@ -59,7 +59,6 @@ rustc-hash = { workspace = true, optional = true }
 fnv = { workspace = true, optional = true }
 governor = { workspace = true, features = ["std", "jitter"] }
 rmpv.workspace = true
-c-ares-sys = { workspace = true, optional = true } # for DEP_ version check
 mlua = { workspace = true, features = ["send"], optional = true }
 pyo3 = { workspace = true, features = ["auto-initialize"], optional = true }
 g3-compat.workspace = true
@@ -104,11 +103,12 @@ lua51 = ["lua", "mlua/lua51"]
 lua53 = ["lua", "mlua/lua53"]
 lua54 = ["lua", "mlua/lua54"]
 python = ["pyo3"]
-c-ares = ["g3-resolver/c-ares", "dep:c-ares-sys"]
+c-ares = ["g3-resolver/c-ares"]
 hickory = ["g3-resolver/hickory"]
 geoip = ["g3-geoip", "g3-yaml/geoip", "fixedbitset", "rustc-hash", "fnv"]
 quic = ["g3-daemon/quic", "g3-resolver/quic", "dep:quinn"]
 vendored-openssl = ["openssl/vendored", "openssl-probe"]
 vendored-tongsuo = ["openssl/tongsuo", "openssl-probe", "g3-yaml/tongsuo", "g3-json/tongsuo"]
-vendored-aws-lc = ["openssl/aws-lc", "openssl-probe", "g3-tls-cert/aws-lc"]
+vendored-aws-lc = ["openssl/aws-lc", "openssl-probe", "g3-types/aws-lc", "g3-tls-cert/aws-lc", "g3-openssl/aws-lc"]
+vendored-boringssl = ["openssl/boringssl", "openssl-probe", "g3-types/boringssl", "g3-tls-cert/boringssl", "g3-openssl/boringssl"]
 vendored-c-ares = ["c-ares", "g3-resolver/vendored-c-ares"]
