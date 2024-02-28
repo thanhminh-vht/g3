@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+mod module;
 mod opts;
 mod progress;
 

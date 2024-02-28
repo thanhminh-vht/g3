@@ -26,7 +26,9 @@ use g3_dpi::{
 use g3_icap_client::IcapServiceConfig;
 use g3_tls_cert::agent::CertAgentConfig;
 use g3_types::metrics::MetricsName;
-use g3_types::net::OpensslInterceptionClientConfigBuilder;
+use g3_types::net::{
+    OpensslInterceptionClientConfigBuilder, OpensslInterceptionServerConfigBuilder,
+};
 use g3_udpdump::StreamDumpConfig;
 use g3_yaml::YamlDocPosition;
 
@@ -39,13 +41,14 @@ pub(crate) struct AuditorConfig {
     pub(crate) client_tcp_portmap: ProtocolPortMap,
     pub(crate) tls_cert_agent: Option<CertAgentConfig>,
     pub(crate) tls_interception_client: OpensslInterceptionClientConfigBuilder,
+    pub(crate) tls_interception_server: OpensslInterceptionServerConfigBuilder,
     pub(crate) tls_stream_dump: Option<StreamDumpConfig>,
     pub(crate) log_uri_max_chars: usize,
     pub(crate) h1_interception: H1InterceptionConfig,
     pub(crate) h2_interception: H2InterceptionConfig,
     pub(crate) icap_reqmod_service: Option<Arc<IcapServiceConfig>>,
     pub(crate) icap_respmod_service: Option<Arc<IcapServiceConfig>>,
-    pub(crate) application_audit_ratio: Bernoulli,
+    pub(crate) task_audit_ratio: Bernoulli,
 }
 
 impl AuditorConfig {
@@ -66,13 +69,14 @@ impl AuditorConfig {
             client_tcp_portmap: ProtocolPortMap::tcp_client(),
             tls_cert_agent: None,
             tls_interception_client: Default::default(),
+            tls_interception_server: Default::default(),
             tls_stream_dump: None,
             log_uri_max_chars: 1024,
             h1_interception: Default::default(),
             h2_interception: Default::default(),
             icap_reqmod_service: None,
             icap_respmod_service: None,
-            application_audit_ratio: Bernoulli::new(1.0).unwrap(),
+            task_audit_ratio: Bernoulli::new(1.0).unwrap(),
         }
     }
 
@@ -137,6 +141,14 @@ impl AuditorConfig {
                 self.tls_interception_client = builder;
                 Ok(())
             }
+            "tls_interception_server" => {
+                let builder = g3_yaml::value::as_tls_interception_server_config_builder(v)
+                    .context(format!(
+                        "invalid tls interception server config value for key {k}"
+                    ))?;
+                self.tls_interception_server = builder;
+                Ok(())
+            }
             "tls_stream_dump" => {
                 let dump = g3_yaml::value::as_stream_dump_config(v)
                     .context(format!("invalid udp stream dump config value for key {k}"))?;
@@ -172,8 +184,8 @@ impl AuditorConfig {
                 self.icap_respmod_service = Some(Arc::new(service));
                 Ok(())
             }
-            "application_audit_ratio" => {
-                self.application_audit_ratio = g3_yaml::value::as_random_ratio(v)
+            "task_audit_ratio" | "application_audit_ratio" => {
+                self.task_audit_ratio = g3_yaml::value::as_random_ratio(v)
                     .context(format!("invalid random ratio value for key {k}"))?;
                 Ok(())
             }
