@@ -40,7 +40,7 @@ fn as_certificates_from_single_element(value: &ValueRef) -> anyhow::Result<Vec<C
     }
 }
 
-pub fn as_certificates(value: &ValueRef) -> anyhow::Result<Vec<Certificate>> {
+pub fn as_rustls_certificates(value: &ValueRef) -> anyhow::Result<Vec<Certificate>> {
     if let ValueRef::Array(seq) = value {
         let mut certs = Vec::with_capacity(seq.len());
         for (i, v) in seq.iter().enumerate() {
@@ -71,7 +71,7 @@ where
     }
 }
 
-pub fn as_private_key(value: &ValueRef) -> anyhow::Result<PrivateKey> {
+pub fn as_rustls_private_key(value: &ValueRef) -> anyhow::Result<PrivateKey> {
     let bytes = match value {
         ValueRef::String(s) => s.as_bytes(),
         ValueRef::Binary(b) => *b,

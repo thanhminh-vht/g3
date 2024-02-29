@@ -20,6 +20,17 @@ G3 Project 由若干组件构成。
 
 通用正向代理解决方案，同时带有TCP映射、TLS卸载/封装、透明代理、简单反向代理等功能。
 
+#### 主要特性
+
+- Async Rust: 高效、稳定
+- Http1 / Socks4 / Socks5 正向代理协议, SNI Proxy and TCP TPROXY
+- TLS支持OpenSSL / BoringSSL / AWS-LC / Tongsuo, 部分场景支持rustls
+- TLS中间人劫持, 解密流量导出, HTTP1 and HTTP2协议解析
+- ICAP审计
+- 优雅重载 & 热升级
+- 灵活的负载均衡&容灾策略
+- 多种日志 & 监控解决方案集成能力
+
 更多详情参考 [g3proxy](g3proxy/README.md)。 
 
 ### g3tiles
@@ -115,6 +126,10 @@ Cloudflare Keyless Server的简单实现。
 ### 静态链接
 
 参考 [Static Linking](doc/static-linking.md)。
+
+### 使用OpenSSL变种编译
+
+参考 [OpenSSL Variants](doc/openssl-variants.md)。
 
 ## 贡献指南
 

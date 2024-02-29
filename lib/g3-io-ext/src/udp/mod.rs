@@ -18,7 +18,7 @@ mod stats;
 pub use stats::{ArcLimitedRecvStats, ArcLimitedSendStats, LimitedRecvStats, LimitedSendStats};
 
 mod ext;
-pub use ext::{RecvMsgBuf, RecvMsgHdr, SendMsgHdr, UdpSocketExt};
+pub use ext::{RecvMsgHdr, SendMsgHdr, UdpSocketExt};
 
 mod recv;
 mod send;
@@ -41,7 +41,6 @@ pub use copy::{
 pub use copy::{UdpCopyClientToRemote, UdpCopyError, UdpCopyRemoteToClient};
 
 mod split;
-
 pub use split::{
     split as split_udp, RecvHalf as UdpRecvHalf, ReuniteError as UdpReuniteError,
     SendHalf as UdpSendHalf,
