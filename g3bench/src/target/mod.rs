@@ -20,6 +20,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context};
+use governor::RateLimiter;
 use hdrhistogram::Histogram;
 use tokio::signal::unix::SignalKind;
 use tokio::sync::{mpsc, Barrier, Semaphore};
@@ -32,23 +33,11 @@ use super::ProcArgs;
 
 mod stats;
 
-mod proxy_protocol;
-use proxy_protocol::{AppendProxyProtocolArgs, ProxyProtocolArgs};
-
-mod openssl;
-use self::openssl::{AppendOpensslArgs, OpensslTlsClientArgs};
-
-#[cfg(feature = "rustls")]
-mod rustls;
-#[cfg(feature = "rustls")]
-use self::rustls::{AppendRustlsArgs, RustlsTlsClientArgs};
-
-mod http;
-
 pub mod h1;
 pub mod h2;
 pub mod keyless;
-pub mod ssl;
+pub mod openssl;
+pub mod rustls;
 
 #[cfg_attr(feature = "hickory", path = "dns/mod.rs")]
 #[cfg_attr(not(feature = "hickory"), path = "no_dns.rs")]
@@ -60,7 +49,7 @@ pub mod h3;
 
 const QUANTILE: &str = "quantile";
 
-trait BenchHistogram {
+pub(crate) trait BenchHistogram {
     fn refresh(&mut self);
     fn emit(&self, client: &mut StatsdClient);
 
@@ -147,7 +136,7 @@ trait BenchHistogram {
     }
 }
 
-trait BenchRuntimeStats {
+pub(crate) trait BenchRuntimeStats {
     fn emit(&self, client: &mut StatsdClient);
     fn summary(&self, total_time: Duration);
 }
@@ -207,6 +196,10 @@ where
             .map_err(|e| anyhow!("failed to set handler for SIGINT: {e:?}"))?,
     );
 
+    let rate_limit = proc_args
+        .rate_limit
+        .as_ref()
+        .map(|c| Arc::new(RateLimiter::direct(c.get_inner())));
     for i in 0..proc_args.concurrency {
         let sem = Arc::clone(&sync_sem);
         let barrier = Arc::clone(&sync_barrier);
@@ -220,6 +213,7 @@ where
         let task_unconstrained = proc_args.task_unconstrained;
         let latency = proc_args.latency;
         let ignore_fatal_error = proc_args.ignore_fatal_error;
+        let rate_limit = rate_limit.clone();
         let rt = super::worker::select_handle(i).unwrap_or_else(tokio::runtime::Handle::current);
         rt.spawn(async move {
             sem.add_permits(1);
@@ -238,6 +232,12 @@ where
             while let Some(task_id) = global_state.fetch_request() {
                 if let Some(latency) = &mut latency_interval {
                     latency.tick().await;
+                }
+
+                if let Some(r) = &rate_limit {
+                    while let Err(t) = r.check() {
+                        tokio::time::sleep_until(t.earliest_possible().into()).await;
+                    }
                 }
 
                 let time_start = Instant::now();

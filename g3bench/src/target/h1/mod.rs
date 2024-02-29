@@ -19,7 +19,7 @@ use std::sync::Arc;
 use clap::{ArgMatches, Command};
 
 use super::{BenchTarget, BenchTaskContext, ProcArgs};
-use crate::target::http::{HttpHistogram, HttpHistogramRecorder, HttpRuntimeStats};
+use crate::module::http::{HttpHistogram, HttpHistogramRecorder, HttpRuntimeStats};
 
 mod connection;
 use connection::{BoxHttpForwardConnection, SavedHttpForwardConnection};

@@ -57,7 +57,7 @@
 每个服务有一个入口配置文件，yaml格式，后缀可更改，但需要保持所有引用的配置文件均具有相同的后缀。下文将使用*main.yml*指代入口配置文件。
 
 使用发行版原生安装包安装的，已经安装了systemd参数化服务配置文件，参数就是进程组名称，
-对应的入口配置文件存放路径为`/etc/<daemon_group>/main.yml`。
+对应的入口配置文件存放路径为`/etc/g3proxy/<daemon_group>/main.yml`。
 
 未使用安装包安装的，可以参考[g3proxy@.service](service/g3proxy@.latest.service)自行设计服务化使用方式。
 
@@ -672,7 +672,7 @@ explicit_sites:
 auditor:
   - name: default
     protocol_inspection: {} # 开启协议识别，使用默认参数
-    tls_cert_generator: {}  # 开启TLS劫持，使用默认参数
+    tls_cert_generator: {}  # 开启TLS劫持，使用默认参数，Peer地址为127.0.0.1:2999
     tls_interception_client: {} # 可配置代理对目标地址TLS连接参数
     h1_interception: {}         # HTTP/1.0 解析参数
     h2_interception: {}         # HTTP/2 解析参数
@@ -680,6 +680,8 @@ auditor:
     icap_respmod_service: icap://xxx # ICAP RESPMOD服务配置
     application_audit_ratio: 1.0     # 应用流量审计比例，按客户端代理请求匹配，若审计则进行协议识别及TLS劫持
 ```
+
+注意该功能需搭配tls cert generator使用，参考实现为[g3fcgen](/g3fcgen)，示例配置参考[g3fcgen simple conf](/g3fcgen/examples/simple)。
 
 ### TLS解密流量导出
 

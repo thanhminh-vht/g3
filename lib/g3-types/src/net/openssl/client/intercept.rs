@@ -29,7 +29,7 @@ use super::{
     OpensslClientSessionCache, OpensslSessionCacheConfig, DEFAULT_HANDSHAKE_TIMEOUT,
     MINIMAL_HANDSHAKE_TIMEOUT,
 };
-use crate::net::UpstreamAddr;
+use crate::net::{TlsAlpn, TlsServerName, UpstreamAddr};
 
 #[derive(Clone)]
 pub struct OpensslInterceptionClientConfig {
@@ -39,34 +39,27 @@ pub struct OpensslInterceptionClientConfig {
 }
 
 impl OpensslInterceptionClientConfig {
-    pub fn build_ssl<'a>(
-        &'a self,
-        sni_hostname: Option<&str>,
+    pub fn build_ssl(
+        &self,
+        server_name: Option<&TlsServerName>,
         upstream: &UpstreamAddr,
-        alpn_protocols: Option<impl Iterator<Item = &'a [u8]>>,
+        alpn_ext: Option<&TlsAlpn>,
     ) -> anyhow::Result<Ssl> {
         let mut ssl =
             Ssl::new(&self.ssl_context).map_err(|e| anyhow!("failed to get new Ssl state: {e}"))?;
-        if let Some(domain) = sni_hostname {
+        if let Some(name) = server_name {
             let verify_param = ssl.param_mut();
             verify_param
-                .set_host(domain)
+                .set_host(name.as_ref())
                 .map_err(|e| anyhow!("failed to set cert verify domain: {e}"))?;
-            ssl.set_hostname(domain)
+            ssl.set_hostname(name.as_ref())
                 .map_err(|e| anyhow!("failed to set sni hostname: {e}"))?;
         }
         if let Some(cache) = &self.session_cache {
             cache.find_and_set_cache(&mut ssl, upstream.host(), upstream.port())?;
         }
-        if let Some(protocols) = alpn_protocols {
-            let mut buf = Vec::with_capacity(32);
-            protocols.for_each(|p| {
-                if let Ok(len) = u8::try_from(p.len()) {
-                    buf.push(len);
-                    buf.extend_from_slice(p);
-                }
-            });
-            ssl.set_alpn_protos(buf.as_slice())
+        if let Some(v) = alpn_ext {
+            ssl.set_alpn_protos(v.wired_list_sequence())
                 .map_err(|e| anyhow!("failed to set alpn protocols: {e}"))?;
         }
         Ok(ssl)
@@ -84,6 +77,8 @@ pub struct OpensslInterceptionClientConfigBuilder {
     enable_sct: bool,
     #[cfg(any(feature = "aws-lc", feature = "boringssl"))]
     enable_grease: bool,
+    #[cfg(any(feature = "aws-lc", feature = "boringssl"))]
+    permute_extensions: bool,
 }
 
 impl Default for OpensslInterceptionClientConfigBuilder {
@@ -98,6 +93,8 @@ impl Default for OpensslInterceptionClientConfigBuilder {
             enable_sct: false,
             #[cfg(any(feature = "aws-lc", feature = "boringssl"))]
             enable_grease: false,
+            #[cfg(any(feature = "aws-lc", feature = "boringssl"))]
+            permute_extensions: false,
         }
     }
 }
@@ -172,6 +169,16 @@ impl OpensslInterceptionClientConfigBuilder {
         log::warn!("grease can only be set for BoringSSL variants");
     }
 
+    #[cfg(any(feature = "aws-lc", feature = "boringssl"))]
+    pub fn set_permute_extensions(&mut self, enable: bool) {
+        self.permute_extensions = enable;
+    }
+
+    #[cfg(not(any(feature = "aws-lc", feature = "boringssl")))]
+    pub fn set_permute_extensions(&mut self, _enable: bool) {
+        log::warn!("permute extensions can only be set for BoringSSL variants");
+    }
+
     pub fn build(&self) -> anyhow::Result<OpensslInterceptionClientConfig> {
         let mut ctx_builder = SslConnector::builder(SslMethod::tls_client())
             .map_err(|e| anyhow!("failed to create ssl context builder: {e}"))?;
@@ -206,6 +213,10 @@ impl OpensslInterceptionClientConfigBuilder {
         #[cfg(any(feature = "aws-lc", feature = "boringssl"))]
         if self.enable_grease {
             ctx_builder.set_grease_enabled(true);
+        }
+        #[cfg(any(feature = "aws-lc", feature = "boringssl"))]
+        if self.permute_extensions {
+            ctx_builder.set_permute_extensions(true);
         }
 
         #[cfg(any(feature = "aws-lc", feature = "boringssl", feature = "tongsuo"))]

@@ -62,6 +62,15 @@ Set the tls client config for server handshake in TLS interception.
 
 **default**: set with default value
 
+tls_interception_server
+-----------------------
+
+**optional**, **type**: :ref:`tls interception server <conf_value_dpi_tls_interception_server>`
+
+Set the tls server config for client handshake in TLS interception.
+
+**default**: set with default value
+
 tls_stream_dump
 ---------------
 
@@ -122,19 +131,19 @@ Set the ICAP RESPMOD service config.
 
 .. versionadded:: 1.7.3
 
-.. _conf_auditor_application_audit_ratio:
+.. _conf_auditor_task_audit_ratio:
 
-application_audit_ratio
------------------------
+task_audit_ratio
+----------------
 
 **optional**, **type**: :ref:`random ratio <conf_value_random_ratio>`
 
-Set the application audit (like ICAP REQMOD/RESPMOD) ratio for incoming requests.
+Set the task audit (like ICAP REQMOD/RESPMOD) ratio for incoming requests.
 
 This also controls whether protocol inspection is really enabled for a specific request.
 
 User side settings may override this.
 
-**default**: 1.0
+**default**: 1.0, **alias**: application_audit_ratio
 
 .. versionadded:: 1.7.4
