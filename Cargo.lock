@@ -1648,7 +1648,7 @@ dependencies = [
 
 [[package]]
 name = "g3proxy"
-version = "1.7.36+boringssl"
+version = "1.7.37+boringssl"
 dependencies = [
  "ahash",
  "anyhow",
