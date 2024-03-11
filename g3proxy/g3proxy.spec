@@ -13,7 +13,7 @@
 %define build_profile release-lto
 
 Name:           g3proxy
-Version:        1.7.36+tongsuo
+Version:        1.7.37+tongsuo
 Release:        1%{?dist}
 Summary:        Generic proxy for G3 Project
 
