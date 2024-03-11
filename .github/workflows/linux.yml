@@ -7,6 +7,14 @@ on:
       - 'doc/**'
       - 'demo/**'
       - 'scripts/**'
+      - 'g3proxy/doc/**'
+    branches:
+      - 'master'
+      - 'rel/**'
+  pull_request:
+    branches:
+      - 'master'
+      - 'rel/**'
 
 env:
   CARGO_TERM_COLOR: always
