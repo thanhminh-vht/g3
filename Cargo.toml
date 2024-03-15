@@ -33,7 +33,6 @@ members = [
     "lib/g3-slog-types",
     "lib/g3-geoip",
     "lib/g3-openssl",
-    "lib/bssl-sys",
     "g3bench",
     "g3fcgen",
     "g3mkcert",
@@ -146,8 +145,8 @@ pin-project = "1.1"
 #
 rustls = "0.21.5"
 tokio-rustls = "0.24"
-openssl = { package = "variant-ssl", version = "0.13.2" }
-openssl-sys = { package = "variant-ssl-sys", version = "0.12.0" }
+openssl = { package = "variant-ssl", version = "0.14.0" }
+openssl-sys = { package = "variant-ssl-sys", version = "0.13.0" }
 openssl-probe = "0.1"
 rustls-pemfile = "1.0"
 rustls-native-certs = "0.6"
@@ -177,7 +176,7 @@ rmp-serde = "1"
 rmp = "0.8"
 rmpv = "1.0"
 #
-redis = { version = "0.24", default-features = false, features = ["tcp_nodelay"] }
+redis = { version = "0.25.1", default-features = false, features = ["tcp_nodelay"] }
 #
 flate2 = "1.0"
 zip = { version = "0.6", default-features = false }
@@ -235,5 +234,3 @@ debug-assertions = false
 
 [patch.crates-io]
 quinn-proto = { version = "0.10.6", git = "https://github.com/zh-jq/quinn.git", branch = "ring-0.17" }
-hickory-proto = { version = "0.24.0", git = "https://github.com/hickory-dns/hickory-dns.git", rev = "b0c0566" }
-bssl-sys = { version = "0.1.0", path = "lib/bssl-sys" }
