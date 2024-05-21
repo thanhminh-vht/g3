@@ -33,6 +33,8 @@ jobs:
           submodules: true
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - name: Install tools (choco)
         run: choco install capnproto
       - name: Install lib dependencies (vcpkg)
@@ -43,3 +45,39 @@ jobs:
         run: cargo clippy --no-default-features --features $env:WIN_FEATURES --tests -- --deny warnings
       - name: Cargo test
         run: cargo test --no-default-features --features $env:WIN_FEATURES
+
+  build-vendored:
+    name: Build vendored
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        feature:
+          - vendored-openssl
+          - vendored-tongsuo
+          - vendored-aws-lc
+          - vendored-boringssl
+        component:
+          - g3proxy
+          - g3bench
+          - g3tiles
+          - g3fcgen
+          - g3mkcert
+          - g3keymess
+        include:
+          - feature: vendored-c-ares
+            component: g3proxy
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Install dependencies
+        run: choco install capnproto nasm
+      - name: Cargo build
+        run: cargo build --no-default-features --features ${{ matrix.feature }} -p ${{ matrix.component }}
+      - name: Cargo clippy
+        run: cargo clippy --no-default-features --features ${{ matrix.feature }} -p ${{ matrix.component }} -- --deny warnings
