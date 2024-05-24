@@ -33,6 +33,8 @@ openssl.workspace = true
 openssl-probe = { workspace = true, optional = true }
 rustls.workspace = true
 rustls-pki-types.workspace = true
+s2n-tls.workspace = true
+s2n-tls-tokio.workspace = true
 quinn = { workspace = true, optional = true, features = ["rustls"] }
 tokio-rustls.workspace = true
 governor = { workspace = true, features = ["std", "jitter"] }

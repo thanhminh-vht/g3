@@ -227,6 +227,7 @@ fn spawn_new_unlocked(config: AnyServerConfig) -> anyhow::Result<()> {
         AnyServerConfig::PlainQuicPort(c) => PlainQuicPort::prepare_initial(c)?,
         AnyServerConfig::OpensslProxy(c) => OpensslProxyServer::prepare_initial(c)?,
         AnyServerConfig::RustlsProxy(c) => RustlsProxyServer::prepare_initial(c)?,
+        AnyServerConfig::S2nTlsProxy(_c) => todo!(),
         AnyServerConfig::KeylessProxy(c) => KeylessProxyServer::prepare_initial(c)?,
     };
     registry::add(name.clone(), server)?;

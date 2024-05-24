@@ -36,6 +36,7 @@ pub(crate) mod plain_tcp_port;
 pub(crate) mod keyless_proxy;
 pub(crate) mod openssl_proxy;
 pub(crate) mod rustls_proxy;
+pub(crate) mod s2n_tls_proxy;
 
 mod registry;
 
@@ -86,6 +87,7 @@ pub(crate) enum AnyServerConfig {
     PlainQuicPort(plain_quic_port::PlainQuicPortConfig),
     OpensslProxy(openssl_proxy::OpensslProxyServerConfig),
     RustlsProxy(rustls_proxy::RustlsProxyServerConfig),
+    S2nTlsProxy(s2n_tls_proxy::S2nTlsProxyServerConfig),
     KeylessProxy(keyless_proxy::KeylessProxyServerConfig),
 }
 
@@ -99,6 +101,7 @@ macro_rules! impl_transparent0 {
                 AnyServerConfig::PlainQuicPort(s) => s.$f(),
                 AnyServerConfig::OpensslProxy(s) => s.$f(),
                 AnyServerConfig::RustlsProxy(s) => s.$f(),
+                AnyServerConfig::S2nTlsProxy(s) => s.$f(),
                 AnyServerConfig::KeylessProxy(s) => s.$f(),
             }
         }
@@ -115,6 +118,7 @@ macro_rules! impl_transparent1 {
                 AnyServerConfig::PlainQuicPort(s) => s.$f(p),
                 AnyServerConfig::OpensslProxy(s) => s.$f(p),
                 AnyServerConfig::RustlsProxy(s) => s.$f(p),
+                AnyServerConfig::S2nTlsProxy(s) => s.$f(p),
                 AnyServerConfig::KeylessProxy(s) => s.$f(p),
             }
         }
@@ -183,6 +187,11 @@ fn load_server(
             let server = rustls_proxy::RustlsProxyServerConfig::parse(map, position)
                 .context("failed to load this RustlsProxy server")?;
             Ok(AnyServerConfig::RustlsProxy(server))
+        }
+        "s2n_tls_proxy" | "s2ntlsproxy" => {
+            let server = s2n_tls_proxy::S2nTlsProxyServerConfig::parse(map, position)
+                .context("failed to load this S2nTlsProxy server")?;
+            Ok(AnyServerConfig::S2nTlsProxy(server))
         }
         "keyless_proxy" | "keylessproxy" => {
             let server = keyless_proxy::KeylessProxyServerConfig::parse(map, position)
